@@ -49,7 +49,7 @@ def fetch_busy(api_key, conn_id, user_id, calendar_id, time_min, time_max):
     if not body.get("successful", False):
         raise RuntimeError(f"tool reported failure: {body.get('error')}")
     data = body.get("data") or {}
-    cals = data.get("calendars") or {}
+    cals = (data.get("response_data") or {}).get("calendars") or data.get("calendars") or {}
     info = cals.get(calendar_id) or {}
     out = []
     for b in info.get("busy", []):
