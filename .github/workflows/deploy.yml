@@ -67,3 +67,24 @@ jobs:
         if: steps.guard.outputs.ready == 'true'
         working-directory: backend
         run: flyctl deploy --remote-only --app "${FLY_APP}"
+
+      - name: Smoke test (health + DB-backed event-types)
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -e
+          API="https://ifb-scheduler.fly.dev"
+          echo "Waiting for /healthz (cold start tolerated) ..."
+          ok=""
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$API/healthz" || true)
+            if [ "$code" = "200" ]; then ok=1; echo "healthz 200 on attempt $i"; break; fi
+            echo "  attempt $i: healthz HTTP $code"; sleep 3
+          done
+          if [ -z "$ok" ]; then echo "healthz never returned 200 - deploy unhealthy"; exit 1; fi
+
+          echo "Checking DB-backed /api/event-types ..."
+          body=$(curl -s --max-time 15 "$API/api/event-types" || true)
+          echo "event-types body: $body"
+          echo "$body" | grep -q "initial-prospective-client-video-conference-30-min" \
+            || { echo "seeded event-type slug missing - DB wiring failed"; exit 1; }
+          echo "SMOKE TEST PASSED: app live + Postgres reachable + seed present."
