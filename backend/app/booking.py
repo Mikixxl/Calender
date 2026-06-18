@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import db, notifications, zoom
+from . import db, gcal, notifications, zoom
 from .availability import (
     EventTypeConfig, Interval, Schedule, WeeklyRule, DateOverride, generate_slots,
 )
@@ -129,6 +129,29 @@ async def create_booking(payload) -> dict:
                 raise
 
             await notifications.queue_for_booking(conn, booking, et)
+
+        # Best-effort calendar mirror, AFTER the booking is committed. Composio
+        # is never in the critical path here: the row already exists, the Zoom
+        # link is minted, the confirmation mail is queued. If this fails the
+        # booking still stands; we only miss annotating it with the event id.
+        try:
+            names = [p["name"].strip() for p in participants
+                     if isinstance(p, dict) and p.get("name") and p["name"].strip()]
+            cal_summary = (", ".join(names) if names else et["name"])[:190]
+            cal_desc = (f'{et["name"]}\n'
+                        f'Booked by: {payload.name} <{payload.email}>\n'
+                        f'Join: {booking["location_url"]}')
+            ev_id = await gcal.create_event(
+                cal_summary, booking["start_utc"], et["duration_min"],
+                description=cal_desc, location=booking["location_url"],
+            )
+            if ev_id:
+                await conn.execute(
+                    "update sched.bookings set gcal_event_id=$1 where id=$2",
+                    ev_id, booking["id"],
+                )
+        except Exception as exc:  # noqa: BLE001 - calendar mirror is best-effort
+            print(f"[gcal] mirror create failed: {exc!r}")
 
     return {
         "id": str(booking["id"]),

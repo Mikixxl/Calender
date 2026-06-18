@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from . import db, notifications
+from . import db, notifications, gcal
 from .availability import (
     EventTypeConfig, Schedule, WeeklyRule, DateOverride, Interval,
     generate_slots, render_dual,
@@ -160,7 +160,7 @@ async def cancel_booking(token: str):
     async with pool.acquire() as conn:
         async with conn.transaction():
             b = await conn.fetchrow(
-                "select id, status from sched.bookings where cancel_token=$1", token
+                "select id, status, gcal_event_id from sched.bookings where cancel_token=$1", token
             )
             if b is None:
                 raise HTTPException(404, "Not found")
@@ -170,6 +170,13 @@ async def cancel_booking(token: str):
                 "update sched.bookings set status='canceled' where id=$1", b["id"]
             )
             await notifications.queue_cancellation(conn, b["id"])
+        # Best-effort calendar cleanup, after commit. A failure here never
+        # blocks the cancellation.
+        try:
+            if b["gcal_event_id"]:
+                await gcal.delete_event(b["gcal_event_id"])
+        except Exception as exc:  # noqa: BLE001 - mirror cleanup is best-effort
+            print(f"[gcal] mirror delete failed: {exc!r}")
     return {"ok": True, "status": "canceled"}
 
 

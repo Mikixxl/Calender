@@ -32,5 +32,15 @@ class Settings:
     composio_zoom_connection: str = os.environ.get("COMPOSIO_ZOOM_CONNECTION", "")
     composio_zoom_entity: str = os.environ.get("COMPOSIO_ZOOM_ENTITY", "")
 
+    # Google Calendar mirror. Each booking is written into the host's Google
+    # Calendar so the host sees it natively. Best-effort and post-commit: a
+    # booking never depends on this. Reuses composio_api_key. The connection and
+    # user below are the same ones the busy-sync already reads from (the
+    # mikixxl1@gmail.com calendar); they are identifiers, not secrets. An empty
+    # connection disables the mirror.
+    composio_gcal_connection: str = os.environ.get("COMPOSIO_GCAL_CONNECTION", "ca_ezzmrSYp4xxn")
+    composio_gcal_user: str = os.environ.get("COMPOSIO_GCAL_USER", "scheduler-private")
+    gcal_calendar_id: str = os.environ.get("GCAL_CALENDAR_ID", "primary")
+
 
 settings = Settings()

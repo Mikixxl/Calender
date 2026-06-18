@@ -87,6 +87,7 @@ create table sched.bookings (
   booker_timezone      text not null,
   host_timezone        text not null,
   location_url         text,
+  gcal_event_id        text,
   answers              jsonb not null default '{}'::jsonb,
   cancel_token         uuid not null default gen_random_uuid(),
   reschedule_of        uuid references sched.bookings(id),
