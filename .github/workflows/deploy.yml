@@ -6,14 +6,64 @@ on:
       - "backend/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_ORG: ${{ secrets.FLY_ORG }}
+      FLY_APP: ifb-scheduler
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy to Fly (Frankfurt)
-        working-directory: backend
-        run: flyctl deploy --remote-only
+
+      - name: Guard on Fly token
+        id: guard
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "FLY_API_TOKEN not set - skipping deploy. Nothing failed."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up flyctl
+        if: steps.guard.outputs.ready == 'true'
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Create app if missing
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          if ! flyctl apps list | grep -qw "${FLY_APP}"; then
+            flyctl apps create "${FLY_APP}" ${FLY_ORG:+-o "$FLY_ORG"}
+          fi
+
+      - name: Stage runtime secrets
+        if: steps.guard.outputs.ready == 'true'
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_FROM_NAME: ${{ secrets.MAIL_FROM_NAME }}
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          PUBLIC_API_URL: ${{ secrets.PUBLIC_API_URL }}
+          PUBLIC_SITE_URL: ${{ secrets.PUBLIC_SITE_URL }}
+          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
+        run: |
+          set -e
+          PAIRS=()
+          for k in DATABASE_URL GMAIL_USER GMAIL_APP_PASSWORD MAIL_FROM_NAME TICK_TOKEN ADMIN_TOKEN PUBLIC_API_URL PUBLIC_SITE_URL CORS_ORIGINS; do
+            v="${!k}"
+            if [ -n "$v" ]; then PAIRS+=("$k=$v"); fi
+          done
+          if [ ${#PAIRS[@]} -gt 0 ]; then
+            flyctl secrets set "${PAIRS[@]}" --stage --app "${FLY_APP}"
+          else
+            echo "No runtime secrets present to stage yet."
+          fi
+
+      - name: Deploy to Fly (Frankfurt)
+        if: steps.guard.outputs.ready == 'true'
+        working-directory: backend
+        run: flyctl deploy --remote-only --app "${FLY_APP}"
