@@ -67,6 +67,34 @@
   .tt b{color:var(--navy)}
   .hidden{display:none}
   .foot{color:var(--muted);font-size:12px;text-align:center;margin:18px 0}
+  /* calendar picker */
+  .picker{display:grid;grid-template-columns:1fr;gap:20px}
+  @media(min-width:840px){.picker{grid-template-columns:1.05fr .95fr;gap:30px}}
+  .cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .cal-title{font-family:"Cormorant Garamond",serif;color:var(--navy);font-size:21px;font-weight:600}
+  .cal-nav{background:#fff;border:1px solid var(--line);border-radius:8px;width:36px;height:36px;
+    cursor:pointer;color:var(--navy);font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center}
+  .cal-nav:hover:not(:disabled){border-color:var(--gold)}
+  .cal-nav:disabled{opacity:.3;cursor:default}
+  .cal-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:6px}
+  .cal-dow span{text-align:center;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--muted);font-weight:600}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  .cal-cell{aspect-ratio:1;display:flex;align-items:center;justify-content:center}
+  .cal-day{width:100%;height:100%;min-height:38px;border-radius:50%;border:1px solid transparent;
+    background:none;font-family:inherit;font-size:15px;color:#c2bdb2;cursor:default;
+    display:flex;align-items:center;justify-content:center;padding:0}
+  .cal-day.avail{color:var(--navy);font-weight:600;background:rgba(200,162,75,.12);
+    border-color:rgba(200,162,75,.40);cursor:pointer}
+  .cal-day.avail:hover{background:rgba(200,162,75,.24);border-color:var(--gold)}
+  .cal-day.today{box-shadow:inset 0 0 0 2px var(--gold)}
+  .cal-day.sel,.cal-day.sel:hover{background:var(--navy);color:#fff;border-color:var(--navy)}
+  .timepanel{min-height:120px}
+  .tp-day{font-family:"Cormorant Garamond",serif;color:var(--navy);font-size:20px;font-weight:600;margin:0 0 12px}
+  .tp-empty{color:var(--muted);font-size:14px;display:flex;align-items:center;min-height:120px;
+    border:1px dashed var(--line);border-radius:10px;padding:0 16px;background:#fbfaf8}
+  .tp-scroll{max-height:380px;overflow:auto;padding-right:2px}
+  .timepanel .times{grid-template-columns:1fr;gap:8px}
 </style>
 </head>
 <body>
@@ -95,7 +123,8 @@ const TZS = ["Europe/Berlin","Europe/London","Europe/Zurich","Asia/Jerusalem",
   "America/New_York","America/Chicago","America/Los_Angeles","America/Sao_Paulo"];
 
 const state = { tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                etype:null, hostTz:null, days:null, slot:null };
+                etype:null, hostTz:null, days:null, slot:null,
+                vy:null, vm:null, selDay:null };
 
 const $ = s => document.querySelector(s);
 const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c;
@@ -146,59 +175,126 @@ async function loadSlots(){
   $("#hosttz").textContent = "";
   $("#stage").innerHTML = `<p class="note">Loading availability…</p>`;
   const now = new Date();
-  const to = new Date(now.getTime()+30*864e5);
+  const to = new Date(now.getTime()+60*864e5);
   const from = ymd(now, state.tz), toS = ymd(to, state.tz);
   try{
     const r = await fetch(`/api/event-types/${encodeURIComponent(slug)}/slots`+
       `?from=${from}&to=${toS}&tz=${encodeURIComponent(state.tz)}`);
     if(!r.ok) throw new Error("slots");
     const data = await r.json();
-    state.days = data.days; state.hostTz = data.host_timezone;
+    state.days = data.days; state.hostTz = data.host_timezone; state.selDay = null;
     $("#hosttz").textContent = state.tz===state.hostTz ? "" :
       `(also shown as ${state.hostTz.replace(/_/g," ")})`;
-    renderDays();
+    renderPicker();
   }catch(e){
     $("#stage").innerHTML = `<p class="err">Availability is not reachable yet. Please check back shortly.</p>`;
   }
 }
 
-function renderDays(){
-  const days = Object.keys(state.days||{}).sort();
-  const stage = $("#stage"); stage.innerHTML = "";
-  stage.appendChild(el("p","step-label","Choose a day"));
-  if(!days.length){ stage.appendChild(el("p","note","No open times in the next 30 days.")); return; }
-  const list = el("div","days");
-  days.forEach(d=>{
-    const row = el("div","day",
-      `<span>${fmtDay(d)}</span><span class="n">${state.days[d].length} times</span>`);
-    row.onclick = ()=>renderTimes(d);
-    list.appendChild(row);
-  });
-  stage.appendChild(list);
+function partsOf(iso){ return {y:+iso.slice(0,4), m:+iso.slice(5,7)-1, d:+iso.slice(8,10)}; }
+function pad2(n){ return String(n).padStart(2,"0"); }
+function longDay(iso){
+  return new Date(iso+"T12:00:00Z").toLocaleDateString("en-GB",
+    {timeZone:"UTC", weekday:"long", day:"numeric", month:"long"});
+}
+function monthRange(){
+  const keys = Object.keys(state.days||{}).sort();
+  const todayIso = ymd(new Date(), state.tz);
+  const t = partsOf(todayIso);
+  const last = keys.length ? partsOf(keys[keys.length-1]) : {y:t.y, m:t.m};
+  return { minY:t.y, minM:t.m, maxY:last.y, maxM:last.m, todayIso };
+}
+function clampView(){
+  const r = monthRange();
+  if(state.vy===null || state.vy===undefined){ state.vy=r.minY; state.vm=r.minM; }
+  const cur=state.vy*12+state.vm, lo=r.minY*12+r.minM, hi=r.maxY*12+r.maxM;
+  const c=Math.max(lo, Math.min(hi, cur));
+  state.vy=Math.floor(c/12); state.vm=c%12;
 }
 
-function renderTimes(day){
-  const stage = $("#stage"); stage.innerHTML = "";
-  const back = el("button","back","← back to days"); back.onclick = renderDays;
-  stage.appendChild(back);
-  stage.appendChild(el("p","step-label","Choose a time on "+fmtDay(day)));
-  const grid = el("div","times");
-  state.days[day].forEach(s=>{
-    const main = fmtTime(s.utc, state.tz);
-    const alt = state.tz===state.hostTz ? "" :
-      `<span class="alt">${fmtTime(s.utc, state.hostTz)} Berlin</span>`;
-    const b = el("div","slot", main+alt);
-    b.onclick = ()=>{ state.slot = s; renderForm(); };
+function renderPicker(){
+  const stage=$("#stage"); stage.innerHTML="";
+  stage.appendChild(el("p","step-label","Select a date & time"));
+  if(!Object.keys(state.days||{}).length){
+    stage.appendChild(el("p","note","No open times in the coming weeks.")); return;
+  }
+  clampView();
+  const pick=el("div","picker");
+  const calBox=el("div","cal"); calBox.id="calBox";
+  const timeBox=el("div","timepanel"); timeBox.id="timeBox";
+  pick.appendChild(calBox); pick.appendChild(timeBox);
+  stage.appendChild(pick);
+  renderCalendar(); renderTimePanel();
+}
+
+function renderCalendar(){
+  const box=$("#calBox"); if(!box) return; box.innerHTML="";
+  const r=monthRange();
+  const cur=state.vy*12+state.vm, lo=r.minY*12+r.minM, hi=r.maxY*12+r.maxM;
+  const head=el("div","cal-head");
+  const prev=el("button","cal-nav","\u2039"); prev.disabled = cur<=lo;
+  const next=el("button","cal-nav","\u203a"); next.disabled = cur>=hi;
+  prev.onclick=()=>{ const c=cur-1; state.vy=Math.floor(c/12); state.vm=((c%12)+12)%12; renderCalendar(); };
+  next.onclick=()=>{ const c=cur+1; state.vy=Math.floor(c/12); state.vm=((c%12)+12)%12; renderCalendar(); };
+  head.appendChild(prev);
+  head.appendChild(el("div","cal-title",
+    new Date(Date.UTC(state.vy,state.vm,1)).toLocaleDateString("en-GB",
+      {timeZone:"UTC", month:"long", year:"numeric"})));
+  head.appendChild(next);
+  box.appendChild(head);
+  box.appendChild(el("div","cal-dow",
+    ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d=>`<span>${d}</span>`).join("")));
+  const grid=el("div","cal-grid");
+  const firstDow=new Date(Date.UTC(state.vy,state.vm,1)).getUTCDay();
+  const offset=(firstDow+6)%7;
+  const dim=new Date(Date.UTC(state.vy,state.vm+1,0)).getUTCDate();
+  for(let i=0;i<offset;i++) grid.appendChild(el("div","cal-cell"));
+  for(let d=1; d<=dim; d++){
+    const iso=`${state.vy}-${pad2(state.vm+1)}-${pad2(d)}`;
+    const cell=el("div","cal-cell");
+    const avail = state.days[iso] && state.days[iso].length>0;
+    let cls="cal-day";
+    if(avail) cls+=" avail";
+    if(iso===r.todayIso) cls+=" today";
+    if(iso===state.selDay) cls+=" sel";
+    const day=el("button",cls,String(d));
+    if(avail){
+      day.onclick=()=>{
+        state.selDay=iso; renderCalendar(); renderTimePanel();
+        if(window.innerWidth<840){ const tb=$("#timeBox"); if(tb) tb.scrollIntoView({behavior:"smooth",block:"start"}); }
+      };
+    } else { day.disabled=true; }
+    cell.appendChild(day); grid.appendChild(cell);
+  }
+  box.appendChild(grid);
+}
+
+function renderTimePanel(){
+  const box=$("#timeBox"); if(!box) return; box.innerHTML="";
+  const list = state.selDay ? (state.days[state.selDay]||[]) : [];
+  if(!state.selDay || !list.length){
+    box.appendChild(el("div","tp-empty","Pick a highlighted day to see available times."));
+    return;
+  }
+  box.appendChild(el("p","tp-day",longDay(state.selDay)));
+  const scroll=el("div","tp-scroll");
+  const grid=el("div","times");
+  list.forEach(s=>{
+    const main=fmtTime(s.utc,state.tz);
+    const alt=state.tz===state.hostTz ? "" :
+      `<span class="alt">${fmtTime(s.utc,state.hostTz)} Berlin</span>`;
+    const b=el("div","slot", main+alt);
+    b.onclick=()=>{ state.slot=s; renderForm(); };
     grid.appendChild(b);
   });
-  stage.appendChild(grid);
+  scroll.appendChild(grid); box.appendChild(scroll);
 }
 
 function renderForm(){
   const e = state.etype, s = state.slot;
   const stage = $("#stage"); stage.innerHTML = "";
-  const back = el("button","back","← back to times");
-  back.onclick = ()=>renderTimes(Object.keys(state.days).find(d=>state.days[d].includes(s)));
+  const back = el("button","back","← change date & time");
+  back.onclick = renderPicker;
   stage.appendChild(back);
 
   const when = `<b>${fmtTime(s.utc,state.tz)}</b>, ${fmtDay(ymd(new Date(s.utc),state.tz))}`+
