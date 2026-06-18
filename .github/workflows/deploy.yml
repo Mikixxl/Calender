@@ -88,3 +88,21 @@ jobs:
           echo "$body" | grep -q "initial-prospective-client-video-conference-30-min" \
             || { echo "seeded event-type slug missing - DB wiring failed"; exit 1; }
           echo "SMOKE TEST PASSED: app live + Postgres reachable + seed present."
+
+      - name: Verify public path via Netlify proxy
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -e
+          SLUG="initial-prospective-client-video-conference-30-min"
+          PUB="https://calender.ifcifb.com/api/event-types/${SLUG}"
+          echo "Hitting exact browser path through Netlify proxy: $PUB"
+          ok=""
+          for i in $(seq 1 15); do
+            body=$(curl -s --max-time 15 "$PUB" || true)
+            if echo "$body" | grep -q "Initial Prospective Client"; then
+              ok=1; echo "proxy OK on attempt $i"; echo "body: $body"; break
+            fi
+            echo "  attempt $i: proxy not ready yet"; sleep 4
+          done
+          if [ -z "$ok" ]; then echo "Netlify->Fly proxy did not return the event; check netlify.toml"; exit 1; fi
+          echo "PUBLIC PATH VERIFIED: calender.ifcifb.com booking page is live."
