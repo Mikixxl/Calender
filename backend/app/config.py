@@ -22,5 +22,14 @@ class Settings:
 
     cors_origins: str = os.environ.get("CORS_ORIGINS", "https://calender.ifcifb.com")
 
+    # Zoom Server-to-Server OAuth - primary per-booking meeting path.
+    zoom_account_id: str = os.environ.get("ZOOM_ACCOUNT_ID", "")
+    zoom_client_id: str = os.environ.get("ZOOM_CLIENT_ID", "")
+    zoom_client_secret: str = os.environ.get("ZOOM_CLIENT_SECRET", "")
+
+    # Composio - secondary per-booking meeting path, independent of the Zoom app.
+    composio_api_key: str = os.environ.get("COMPOSIO_API_KEY", "")
+    composio_zoom_account: str = os.environ.get("COMPOSIO_ZOOM_ACCOUNT", "zoom_gilly-taxus")
+
 
 settings = Settings()

@@ -1,20 +1,146 @@
-"""Zoom integration seam.
+"""Zoom integration: three independent ways to mint a per-booking meeting.
 
-Pilot behaviour mirrors the live Calendly exactly: every booking uses the one
-static room configured on the event type, no Zoom API call. This single
-function is the swap point. When we wire real per-booking meetings, this is the
-only place that changes: create a meeting on the connected Zoom account, set the
-topic to the event name, the start time and duration from the booking, register
-each participant by name, and return the unique join URL.
+Order of attempt:
+  1. Direct Zoom Server-to-Server OAuth REST - self-contained, no third party
+     in the path at booking time. This is the primary.
+  2. Composio ZOOM_CREATE_A_MEETING - a second, independent credential to the
+     same Zoom account. Covers the case where the S2S app is mis-set or revoked.
+  3. The static room baked on the event type - the floor that always works as
+     long as Zoom itself is up.
+
+A booking never fails because a meeting could not be minted. Every layer is
+wrapped; the static link is the last resort. The May Composio blackout could
+not have touched a booking with this in place: path 1 needs no Composio at all.
 """
-from .availability import Interval  # noqa: F401  (kept for type parity)
+import base64
+import time
+from datetime import timezone
+
+import httpx
+
+from .config import settings
+
+_ZOOM_OAUTH = "https://zoom.us/oauth/token"
+_ZOOM_API = "https://api.zoom.us/v2"
+_COMPOSIO_EXEC = "https://backend.composio.dev/api/v3/tools/execute/ZOOM_CREATE_A_MEETING"
+
+_TIMEOUT = httpx.Timeout(12.0)
+
+# Cached S2S access token. The token's life is one hour; we reuse it across
+# bookings and refresh a minute before expiry rather than minting one per call.
+_token_cache = {"tok": "", "exp": 0.0}
+
+
+def _iso_z(start_utc) -> str:
+    """booking.py hands us a tz-aware UTC datetime; render Zoom's UTC literal."""
+    return start_utc.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _find_join_url(obj):
+    """Walk an arbitrarily nested payload for the first join_url string."""
+    if isinstance(obj, dict):
+        if isinstance(obj.get("join_url"), str):
+            return obj["join_url"]
+        for v in obj.values():
+            found = _find_join_url(v)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _find_join_url(v)
+            if found:
+                return found
+    return None
+
+
+async def _s2s_token() -> str:
+    now = time.monotonic()
+    if _token_cache["tok"] and _token_cache["exp"] - 60 > now:
+        return _token_cache["tok"]
+    if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
+        raise RuntimeError("zoom s2s not configured")
+    basic = base64.b64encode(
+        f"{settings.zoom_client_id}:{settings.zoom_client_secret}".encode()
+    ).decode()
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        r = await c.post(
+            _ZOOM_OAUTH,
+            params={"grant_type": "account_credentials", "account_id": settings.zoom_account_id},
+            headers={"Authorization": f"Basic {basic}"},
+        )
+        r.raise_for_status()
+        data = r.json()
+    _token_cache["tok"] = data["access_token"]
+    _token_cache["exp"] = now + int(data.get("expires_in", 3600))
+    return _token_cache["tok"]
+
+
+def _meeting_body(topic, start_utc, duration_min) -> dict:
+    return {
+        "topic": topic,
+        "type": 2,  # scheduled meeting
+        "start_time": _iso_z(start_utc),
+        "duration": int(duration_min),
+        "timezone": "UTC",
+        "settings": {
+            "join_before_host": False,
+            "waiting_room": True,
+            "approval_type": 2,  # no registration
+        },
+    }
+
+
+async def _create_via_s2s(topic, start_utc, duration_min) -> str:
+    tok = await _s2s_token()
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        r = await c.post(
+            f"{_ZOOM_API}/users/me/meetings",
+            headers={"Authorization": f"Bearer {tok}"},
+            json=_meeting_body(topic, start_utc, duration_min),
+        )
+        r.raise_for_status()
+        url = r.json().get("join_url")
+    if not url:
+        raise RuntimeError("zoom s2s: no join_url in response")
+    return url
+
+
+async def _create_via_composio(topic, start_utc, duration_min) -> str:
+    if not settings.composio_api_key:
+        raise RuntimeError("composio not configured")
+    payload = {"arguments": {"user_id": "me", **_meeting_body(topic, start_utc, duration_min)}}
+    if settings.composio_zoom_account:
+        payload["connected_account_id"] = settings.composio_zoom_account
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        r = await c.post(
+            _COMPOSIO_EXEC,
+            headers={"x-api-key": settings.composio_api_key, "Content-Type": "application/json"},
+            json=payload,
+        )
+        r.raise_for_status()
+        data = r.json()
+    if data.get("successful") is False:
+        raise RuntimeError(f"composio zoom failed: {data.get('error')}")
+    url = _find_join_url(data)
+    if not url:
+        raise RuntimeError("composio zoom: no join_url in response")
+    return url
 
 
 async def meeting_for_booking(event, start_utc, duration_min, participants) -> str:
-    """Return the join URL for a booking.
+    """Return a unique Zoom join URL for this booking.
 
-    Today: the static room on the event type. Later: a unique Zoom meeting per
-    booking carrying every participant's name. Signature already passes start,
-    duration and participants so the swap needs no caller change.
+    `participants` is carried for future per-attendee registration; the current
+    create does not register attendees individually. Tries S2S, then Composio,
+    then the static room. Never raises - a booking always gets a usable link.
     """
+    topic = event.get("name") or "Meeting"
+    for mint in (_create_via_s2s, _create_via_composio):
+        try:
+            url = await mint(topic, start_utc, duration_min)
+            if url:
+                return url
+        except Exception as exc:  # noqa: BLE001 - a mint failure must not break the booking
+            print(f"[zoom] {mint.__name__} failed: {exc!r}")
+    print("[zoom] all dynamic paths failed; falling back to static room")
     return event["location_url"]
