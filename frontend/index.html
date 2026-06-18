@@ -134,7 +134,9 @@ const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c;
 
 function initTz(){
   const sel = $("#tz");
-  const opts = Array.from(new Set([state.tz, ...TZS]));
+  const all = (typeof Intl.supportedValuesOf === "function")
+    ? Intl.supportedValuesOf("timeZone") : TZS;
+  const opts = Array.from(new Set([state.tz, ...all]));
   sel.innerHTML = opts.map(z=>`<option value="${z}">${z.replace(/_/g," ")}</option>`).join("");
   sel.value = state.tz;
   sel.onchange = ()=>{ state.tz = sel.value; loadSlots(); };

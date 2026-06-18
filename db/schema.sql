@@ -56,6 +56,7 @@ create table sched.event_types (
   min_notice_min           integer not null default 240,
   date_range_days          smallint not null default 60,
   slot_step_min            smallint not null default 30,
+  min_lead_days            smallint not null default 1,
   reminder_offsets_min     integer[] not null default '{1440,60}',
   created_at               timestamptz not null default now(),
   updated_at               timestamptz not null default now()

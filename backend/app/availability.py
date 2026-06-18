@@ -59,6 +59,10 @@ class EventTypeConfig:
     min_notice_min: int = 0
     date_range_days: int = 60
     slot_step_min: int = 30
+    # Whole-day lead: the earliest bookable host-local date is today + this many
+    # days. 1 means same-day booking is impossible; the soonest offer is the next
+    # day (and the engine rolls past any fully-booked days to the next free one).
+    min_lead_days: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -121,7 +125,7 @@ def generate_slots(
     for r in schedule.weekly:
         weekly.setdefault(r.wday, []).append((r.from_min, r.to_min))
 
-    start_day = now_utc.astimezone(tz).date()
+    start_day = now_utc.astimezone(tz).date() + timedelta(days=etype.min_lead_days)
     last_day = start_day + timedelta(days=horizon)
 
     dur = timedelta(minutes=etype.duration_min)

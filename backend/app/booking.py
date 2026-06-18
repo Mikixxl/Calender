@@ -57,6 +57,7 @@ async def _load_context(conn, slug: str):
         min_notice_min=et["min_notice_min"],
         date_range_days=et["date_range_days"],
         slot_step_min=et["slot_step_min"],
+        min_lead_days=et["min_lead_days"] if "min_lead_days" in et else 1,
     )
     return et, schedule, cfg
 
