@@ -1,19 +1,22 @@
 """External free/busy source.
 
-The live system already funnels every meeting into one Google Calendar, and
-that calendar is the single source of truth for conflicts. Until the service
-account credentials are wired, this returns no external busy intervals, so the
-engine still blocks against the scheduler's own confirmed bookings (handled in
-booking.py) and never self-double-books. Wiring this in is a later step, not a
-correctness gap for the pilot.
+Reads pre-synced busy intervals from sched.busy_blocks. A GitHub Actions cron
+pulls each connected Google Calendar's free/busy via Composio and writes the
+busy intervals into that table; the live booking path only ever reads here, so
+a booking never depends on Composio or Google being reachable at request time.
+If the table is empty (sync never ran, or every calendar is free), this returns
+nothing and the engine still blocks against the scheduler's own bookings.
 """
 from datetime import datetime
 
+from . import db
 from .availability import Interval
 
 
 async def external_busy(start_utc: datetime, end_utc: datetime) -> list[Interval]:
-    # TODO: call Google Calendar freebusy.query for the host calendar over the
-    # window and map each busy block to an Interval. Credentials arrive via a
-    # service account in env; no secret lives in the repo.
-    return []
+    rows = await db.fetch(
+        """select start_utc, end_utc from sched.busy_blocks
+            where end_utc > $1 and start_utc < $2""",
+        start_utc, end_utc,
+    )
+    return [Interval(r["start_utc"], r["end_utc"]) for r in rows]

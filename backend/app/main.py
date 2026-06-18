@@ -18,6 +18,7 @@ from .availability import (
     generate_slots, render_dual,
 )
 from .booking import BookingError, create_booking, _load_context, _busy_for_day
+from .gcal import external_busy
 from .config import settings
 from .models import BookingCreate
 
@@ -109,6 +110,7 @@ async def list_slots(
             win_start, win_end,
         )
         busy = [Interval(r["start_utc"], r["end_utc"]) for r in rows]
+        busy += await external_busy(win_start, win_end)
 
         slots = generate_slots(schedule, cfg, busy, now, horizon_days=max(horizon, 0))
 
