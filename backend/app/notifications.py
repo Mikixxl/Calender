@@ -52,6 +52,11 @@ def _btn(url: str, label: str, bg: str = NAVY) -> str:
             f'margin:4px 8px 4px 0">{label}</a>')
 
 
+def _participant_names(ctx: dict) -> str:
+    ps = ctx.get("participants") or []
+    return ", ".join(p.get("name", "") for p in ps if p.get("name"))
+
+
 # --------------------------------------------------------------------------
 # Message bodies
 # --------------------------------------------------------------------------
@@ -64,8 +69,11 @@ def build_booker_message(ntype: str, ctx: dict) -> tuple[str, str, str]:
     ev = ctx["event_name"]
 
     if ntype == "confirmation":
+        ps = ctx.get("participants") or []
+        attendees = (f"<p><strong>Attendees:</strong> {_participant_names(ctx)}</p>"
+                     if len(ps) > 1 else "")
         body = (f"<p>Dear {name},</p><p>Your <strong>{ev}</strong> is confirmed.</p>"
-                f"{times}"
+                f"{attendees}{times}"
                 f"<p>Join link:</p><p>{_btn(join, 'Join the Zoom meeting', GOLD)}</p>"
                 f"<p style='margin-top:20px'>Need to change it? "
                 f"{_btn(manage, 'Reschedule or cancel')}</p>")
@@ -106,7 +114,8 @@ def build_host_notice(ctx: dict) -> tuple[str, str, str]:
     )
     atable = f"<table style='border-collapse:collapse;font-size:14px;margin:8px 0 16px'>{arows}</table>" if arows else ""
     body = (f"<p>New booking: <strong>{ctx['event_name']}</strong></p>"
-            f"<p>{ctx['booker_name']} &lt;{ctx['booker_email']}&gt; ({ctx['booker_tz']})</p>"
+            f"<p><strong>Participants:</strong> {_participant_names(ctx)}</p>"
+            f"<p>Contact: {ctx['booker_name']} &lt;{ctx['booker_email']}&gt; ({ctx['booker_tz']})</p>"
             f"{times}{atable}"
             f"<p style='margin-top:16px;color:#888;font-size:13px'>After the meeting:</p>"
             f"<p>{_btn(base + '&status=completed', 'Mark attended', '#1a7f4b')}"
@@ -163,7 +172,7 @@ async def process_due(limit: int = 50) -> dict:
     rows = await db.fetch(
         """select n.id, n.ntype, b.id as booking_id, b.start_utc, b.end_utc,
                   b.booker_name, b.booker_email, b.booker_timezone, b.host_timezone,
-                  b.location_url, b.cancel_token, b.answers,
+                  b.location_url, b.cancel_token, b.answers, b.participants,
                   e.name as event_name, e.slug as event_slug
              from sched.notifications n
              join sched.bookings b   on b.id = n.booking_id
@@ -182,7 +191,7 @@ async def process_due(limit: int = 50) -> dict:
             "booker_tz": r["booker_timezone"], "host_tz": r["host_timezone"],
             "location_url": r["location_url"], "cancel_token": r["cancel_token"],
             "event_name": r["event_name"], "event_slug": r["event_slug"],
-            "answers": r["answers"],
+            "answers": r["answers"], "participants": r["participants"],
         }
         try:
             subject, html, text = build_booker_message(r["ntype"], ctx)

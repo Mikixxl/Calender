@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import db, notifications
+from . import db, notifications, zoom
 from .availability import (
     EventTypeConfig, Interval, Schedule, WeeklyRule, DateOverride, generate_slots,
 )
@@ -97,16 +97,30 @@ async def create_booking(payload) -> dict:
                 raise BookingError(409, "That slot is no longer available")
 
             end = start + timedelta(minutes=et["duration_min"])
+
+            # Participant list: the booker is always element 0, then guests.
+            participants = [{"name": payload.name, "email": str(payload.email)}]
+            for g in payload.guests:
+                participants.append({"name": g.name,
+                                     "email": str(g.email) if g.email else None})
+            if len(participants) > et["max_invitees"]:
+                raise BookingError(
+                    422, f"This meeting allows up to {et['max_invitees']} participant(s)")
+
+            join_url = await zoom.meeting_for_booking(
+                et, start, et["duration_min"], participants
+            )
+
             try:
                 booking = await conn.fetchrow(
                     """insert into sched.bookings
                          (event_type_id, start_utc, end_utc, booker_name, booker_email,
-                          booker_timezone, host_timezone, location_url, answers)
-                       values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+                          booker_timezone, host_timezone, location_url, answers, participants)
+                       values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb)
                        returning *""",
                     et["id"], start, end, payload.name, str(payload.email),
-                    payload.booker_timezone, schedule.timezone, et["location_url"],
-                    json.dumps(payload.answers or {}),
+                    payload.booker_timezone, schedule.timezone, join_url,
+                    json.dumps(payload.answers or {}), json.dumps(participants),
                 )
             except Exception as exc:  # unique_violation -> already taken
                 if "bookings_no_double_book" in str(exc):
@@ -121,6 +135,7 @@ async def create_booking(payload) -> dict:
         "start_utc": booking["start_utc"].isoformat(),
         "end_utc": booking["end_utc"].isoformat(),
         "join_url": booking["location_url"],
+        "participants": booking["participants"],
         "manage_token": str(booking["cancel_token"]),
         "booker_timezone": booking["booker_timezone"],
         "host_timezone": booking["host_timezone"],
