@@ -20,11 +20,11 @@
   a{color:var(--navy)}
   .top{background:var(--navy);border-bottom:3px solid var(--gold);padding:16px 22px;color:#fff}
   .top .brand{font-family:"Cormorant Garamond",serif;font-size:22px;letter-spacing:.5px}
-  .wrap{max-width:660px;margin:28px auto;padding:0 18px}
+  .wrap{max-width:860px;margin:28px auto;padding:0 18px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
         padding:26px 26px 30px;box-shadow:0 1px 2px rgba(10,31,68,.04)}
   h1{font-size:30px}
-  .desc{color:var(--muted);font-size:15px}
+  .desc{color:var(--muted);font-size:15px;max-width:640px}
   .desc p{margin:.4em 0}
   .meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13.5px;
         margin:10px 0 4px}
@@ -68,8 +68,10 @@
   .hidden{display:none}
   .foot{color:var(--muted);font-size:12px;text-align:center;margin:18px 0}
   /* calendar picker */
-  .picker{display:grid;grid-template-columns:1fr;gap:20px}
-  @media(min-width:840px){.picker{grid-template-columns:1.05fr .95fr;gap:30px}}
+  .picker{display:block}
+  .cal2{display:grid;grid-template-columns:1fr;gap:26px}
+  @media(min-width:860px){.cal2{grid-template-columns:1fr 1fr;gap:34px}}
+  .cal-nav-spacer{width:36px;height:36px;flex:0 0 auto}
   .cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
   .cal-title{font-family:"Cormorant Garamond",serif;color:var(--navy);font-size:21px;font-weight:600}
   .cal-nav{background:#fff;border:1px solid var(--line);border-radius:8px;width:36px;height:36px;
@@ -89,12 +91,12 @@
   .cal-day.avail:hover{background:rgba(200,162,75,.24);border-color:var(--gold)}
   .cal-day.today{box-shadow:inset 0 0 0 2px var(--gold)}
   .cal-day.sel,.cal-day.sel:hover{background:var(--navy);color:#fff;border-color:var(--navy)}
-  .timepanel{min-height:120px}
+  .timepanel{min-height:120px;margin-top:26px}
   .tp-day{font-family:"Cormorant Garamond",serif;color:var(--navy);font-size:20px;font-weight:600;margin:0 0 12px}
   .tp-empty{color:var(--muted);font-size:14px;display:flex;align-items:center;min-height:120px;
     border:1px dashed var(--line);border-radius:10px;padding:0 16px;background:#fbfaf8}
   .tp-scroll{max-height:380px;overflow:auto;padding-right:2px}
-  .timepanel .times{grid-template-columns:1fr 1fr;gap:8px}
+  .timepanel .times{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
 </style>
 </head>
 <body>
@@ -208,7 +210,7 @@ function clampView(){
   const r = monthRange();
   if(state.vy===null || state.vy===undefined){ state.vy=r.minY; state.vm=r.minM; }
   const cur=state.vy*12+state.vm, lo=r.minY*12+r.minM, hi=r.maxY*12+r.maxM;
-  const c=Math.max(lo, Math.min(hi, cur));
+  const c=Math.max(lo, Math.min(Math.max(lo,hi-1), cur));
   state.vy=Math.floor(c/12); state.vm=c%12;
 }
 
@@ -220,37 +222,26 @@ function renderPicker(){
   }
   clampView();
   const pick=el("div","picker");
-  const calBox=el("div","cal"); calBox.id="calBox";
+  const cal2=el("div","cal2"); cal2.id="cal2";
   const timeBox=el("div","timepanel"); timeBox.id="timeBox";
-  pick.appendChild(calBox); pick.appendChild(timeBox);
+  pick.appendChild(cal2); pick.appendChild(timeBox);
   stage.appendChild(pick);
   renderCalendar(); renderTimePanel();
 }
 
-function renderCalendar(){
-  const box=$("#calBox"); if(!box) return; box.innerHTML="";
+function monthLabel(y,m){
+  return new Date(Date.UTC(y,m,1)).toLocaleDateString("en-GB",
+    {timeZone:"UTC", month:"long", year:"numeric"});
+}
+function monthGrid(y,m){
   const r=monthRange();
-  const cur=state.vy*12+state.vm, lo=r.minY*12+r.minM, hi=r.maxY*12+r.maxM;
-  const head=el("div","cal-head");
-  const prev=el("button","cal-nav","\u2039"); prev.disabled = cur<=lo;
-  const next=el("button","cal-nav","\u203a"); next.disabled = cur>=hi;
-  prev.onclick=()=>{ const c=cur-1; state.vy=Math.floor(c/12); state.vm=((c%12)+12)%12; renderCalendar(); };
-  next.onclick=()=>{ const c=cur+1; state.vy=Math.floor(c/12); state.vm=((c%12)+12)%12; renderCalendar(); };
-  head.appendChild(prev);
-  head.appendChild(el("div","cal-title",
-    new Date(Date.UTC(state.vy,state.vm,1)).toLocaleDateString("en-GB",
-      {timeZone:"UTC", month:"long", year:"numeric"})));
-  head.appendChild(next);
-  box.appendChild(head);
-  box.appendChild(el("div","cal-dow",
-    ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d=>`<span>${d}</span>`).join("")));
   const grid=el("div","cal-grid");
-  const firstDow=new Date(Date.UTC(state.vy,state.vm,1)).getUTCDay();
+  const firstDow=new Date(Date.UTC(y,m,1)).getUTCDay();
   const offset=(firstDow+6)%7;
-  const dim=new Date(Date.UTC(state.vy,state.vm+1,0)).getUTCDate();
+  const dim=new Date(Date.UTC(y,m+1,0)).getUTCDate();
   for(let i=0;i<offset;i++) grid.appendChild(el("div","cal-cell"));
   for(let d=1; d<=dim; d++){
-    const iso=`${state.vy}-${pad2(state.vm+1)}-${pad2(d)}`;
+    const iso=`${y}-${pad2(m+1)}-${pad2(d)}`;
     const cell=el("div","cal-cell");
     const avail = state.days[iso] && state.days[iso].length>0;
     let cls="cal-day";
@@ -261,12 +252,42 @@ function renderCalendar(){
     if(avail){
       day.onclick=()=>{
         state.selDay=iso; renderCalendar(); renderTimePanel();
-        if(window.innerWidth<840){ const tb=$("#timeBox"); if(tb) tb.scrollIntoView({behavior:"smooth",block:"start"}); }
+        if(window.innerWidth<860){ const tb=$("#timeBox"); if(tb) tb.scrollIntoView({behavior:"smooth",block:"start"}); }
       };
     } else { day.disabled=true; }
     cell.appendChild(day); grid.appendChild(cell);
   }
-  box.appendChild(grid);
+  return grid;
+}
+function shiftMonth(delta){
+  const c=state.vy*12+state.vm+delta;
+  state.vy=Math.floor(c/12); state.vm=((c%12)+12)%12; renderCalendar();
+}
+function monthBlock(y,m,opts){
+  const block=el("div","calmonth");
+  const head=el("div","cal-head");
+  if(opts.prev){
+    const b=el("button","cal-nav","\u2039"); b.disabled=opts.prevDisabled;
+    b.onclick=()=>shiftMonth(-1); head.appendChild(b);
+  } else head.appendChild(el("span","cal-nav-spacer"));
+  head.appendChild(el("div","cal-title",monthLabel(y,m)));
+  if(opts.next){
+    const b=el("button","cal-nav","\u203a"); b.disabled=opts.nextDisabled;
+    b.onclick=()=>shiftMonth(1); head.appendChild(b);
+  } else head.appendChild(el("span","cal-nav-spacer"));
+  block.appendChild(head);
+  block.appendChild(el("div","cal-dow",
+    ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d=>`<span>${d}</span>`).join("")));
+  block.appendChild(monthGrid(y,m));
+  return block;
+}
+function renderCalendar(){
+  const wrap=$("#cal2"); if(!wrap) return; wrap.innerHTML="";
+  const r=monthRange();
+  const lo=r.minY*12+r.minM, hi=r.maxY*12+r.maxM, base=state.vy*12+state.vm;
+  const sec=base+1;
+  wrap.appendChild(monthBlock(state.vy, state.vm, {prev:true,  prevDisabled: base<=lo}));
+  wrap.appendChild(monthBlock(Math.floor(sec/12), sec%12, {next:true, nextDisabled: base>=hi-1}));
 }
 
 function renderTimePanel(){
