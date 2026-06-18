@@ -29,7 +29,8 @@ class Settings:
 
     # Composio - secondary per-booking meeting path, independent of the Zoom app.
     composio_api_key: str = os.environ.get("COMPOSIO_API_KEY", "")
-    composio_zoom_account: str = os.environ.get("COMPOSIO_ZOOM_ACCOUNT", "zoom_gilly-taxus")
+    composio_zoom_connection: str = os.environ.get("COMPOSIO_ZOOM_CONNECTION", "")
+    composio_zoom_entity: str = os.environ.get("COMPOSIO_ZOOM_ENTITY", "")
 
 
 settings = Settings()

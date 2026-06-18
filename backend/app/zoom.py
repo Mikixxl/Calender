@@ -106,11 +106,15 @@ async def _create_via_s2s(topic, start_utc, duration_min) -> str:
 
 
 async def _create_via_composio(topic, start_utc, duration_min) -> str:
-    if not settings.composio_api_key:
-        raise RuntimeError("composio not configured")
-    payload = {"arguments": {"user_id": "me", **_meeting_body(topic, start_utc, duration_min)}}
-    if settings.composio_zoom_account:
-        payload["connected_account_id"] = settings.composio_zoom_account
+    # Dormant unless a LIVE connection in this project is explicitly wired.
+    if not (settings.composio_api_key and settings.composio_zoom_connection
+            and settings.composio_zoom_entity):
+        raise RuntimeError("composio zoom not configured")
+    payload = {
+        "connected_account_id": settings.composio_zoom_connection,
+        "entity_id": settings.composio_zoom_entity,
+        "arguments": {"user_id": "me", **_meeting_body(topic, start_utc, duration_min)},
+    }
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
         r = await c.post(
             _COMPOSIO_EXEC,
