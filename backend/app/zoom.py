@@ -98,7 +98,10 @@ async def _create_via_s2s(topic, start_utc, duration_min) -> str:
             headers={"Authorization": f"Bearer {tok}"},
             json=_meeting_body(topic, start_utc, duration_min),
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            # Surface Zoom's own error body. A bare raise_for_status once hid a
+            # missing-scope 400 behind a generic message and cost a long blind hunt.
+            raise RuntimeError(f"zoom s2s create {r.status_code}: {r.text[:300]}")
         url = r.json().get("join_url")
     if not url:
         raise RuntimeError("zoom s2s: no join_url in response")
@@ -134,11 +137,16 @@ async def _create_via_composio(topic, start_utc, duration_min) -> str:
 async def meeting_for_booking(event, start_utc, duration_min, participants) -> str:
     """Return a unique Zoom join URL for this booking.
 
-    `participants` is carried for future per-attendee registration; the current
-    create does not register attendees individually. Tries S2S, then Composio,
-    then the static room. Never raises - a booking always gets a usable link.
+    The meeting topic is the customer name(s) - the booker first, then any
+    guests - so the name shown in the Zoom meeting list and in the waiting room
+    tells the host exactly who is about to be admitted. Falls back to the
+    event-type name only if no participant name is present. Tries S2S, then
+    Composio, then the static room. Never raises - a booking always gets a
+    usable link.
     """
-    topic = event.get("name") or "Meeting"
+    names = [p["name"].strip() for p in (participants or [])
+             if isinstance(p, dict) and p.get("name") and p["name"].strip()]
+    topic = (", ".join(names) if names else event.get("name") or "Meeting")[:190]
     for mint in (_create_via_s2s, _create_via_composio):
         try:
             url = await mint(topic, start_utc, duration_min)
