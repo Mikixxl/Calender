@@ -1,0 +1,30 @@
+# Static booking front end. No build step; just publish the frontend folder.
+[build]
+  publish = "frontend"
+
+# Same-origin API: the page calls /api/... and Netlify proxies to the backend.
+# No CORS, and the Fly URL is never exposed to the browser.
+[[redirects]]
+  from = "/api/*"
+  to = "https://ifb-scheduler.fly.dev/api/:splat"
+  status = 200
+  force = true
+
+# Manage page (confirmation emails link to /manage?token=...).
+[[redirects]]
+  from = "/manage"
+  to = "/manage.html"
+  status = 200
+
+# Any event-type slug path resolves to the booking page, which reads the slug.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

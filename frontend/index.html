@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book a meeting - IFB Bank</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#0a1f44; --gold:#c8a24b; --ink:#1c2230; --muted:#6b7280;
+    --line:#e7e4dd; --bg:#f6f5f2; --card:#ffffff; --ok:#1a7f4b; --err:#a23a3a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:"DM Sans",system-ui,sans-serif;line-height:1.55}
+  h1,h2,h3{font-family:"Cormorant Garamond",Georgia,serif;color:var(--navy);
+           font-weight:600;margin:0 0 .3em;line-height:1.15}
+  a{color:var(--navy)}
+  .top{background:var(--navy);border-bottom:3px solid var(--gold);padding:16px 22px;color:#fff}
+  .top .brand{font-family:"Cormorant Garamond",serif;font-size:22px;letter-spacing:.5px}
+  .wrap{max-width:660px;margin:28px auto;padding:0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:26px 26px 30px;box-shadow:0 1px 2px rgba(10,31,68,.04)}
+  h1{font-size:30px}
+  .desc{color:var(--muted);font-size:15px}
+  .desc p{margin:.4em 0}
+  .meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13.5px;
+        margin:10px 0 4px}
+  .meta b{color:var(--ink);font-weight:600}
+  .tzrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+         margin:18px 0 6px;font-size:14px;color:var(--muted)}
+  select,input,textarea{font-family:inherit;font-size:15px;color:var(--ink);
+    border:1px solid var(--line);border-radius:7px;padding:9px 11px;background:#fff;width:100%}
+  select{width:auto;min-width:200px}
+  .hr{height:1px;background:var(--line);margin:22px 0}
+  .step-label{font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;
+              color:var(--gold);font-weight:600;margin:0 0 10px}
+  .days{display:flex;flex-direction:column;gap:8px}
+  .day{display:flex;justify-content:space-between;align-items:center;cursor:pointer;
+       border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:#fff}
+  .day:hover{border-color:var(--gold)}
+  .day .n{color:var(--muted);font-size:13px}
+  .times{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+  .slot{border:1px solid var(--line);border-radius:7px;padding:10px;text-align:center;
+        cursor:pointer;background:#fff;font-weight:500}
+  .slot:hover{border-color:var(--navy)}
+  .slot .alt{display:block;color:var(--muted);font-size:11.5px;font-weight:400;margin-top:2px}
+  .field{margin:14px 0}
+  .field label{display:block;font-size:14px;font-weight:600;margin-bottom:5px}
+  .field .req{color:var(--err)}
+  textarea{min-height:74px;resize:vertical}
+  .guest{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin:8px 0}
+  .btn{background:var(--navy);color:#fff;border:none;border-radius:8px;
+       padding:12px 20px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit}
+  .btn:hover{background:#0c2a5c}
+  .btn.gold{background:var(--gold);color:#1a1300}
+  .btn.ghost{background:#fff;color:var(--navy);border:1px solid var(--line)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .back{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;
+        padding:0;margin-bottom:12px;font-family:inherit}
+  .note{font-size:13px;color:var(--muted)}
+  .err{color:var(--err);font-size:14px;margin-top:10px}
+  .ok-card{border-left:3px solid var(--ok);background:#f3faf5;padding:16px 18px;border-radius:8px}
+  .tt{font-size:14px}
+  .tt b{color:var(--navy)}
+  .hidden{display:none}
+  .foot{color:var(--muted);font-size:12px;text-align:center;margin:18px 0}
+</style>
+</head>
+<body>
+  <div class="top"><span class="brand">IFB Bank</span></div>
+  <div class="wrap">
+    <div class="card">
+      <div id="head"></div>
+
+      <div class="tzrow">
+        <span>Times shown in</span>
+        <select id="tz"></select>
+        <span id="hosttz"></span>
+      </div>
+
+      <div class="hr"></div>
+      <div id="stage"><p class="note">Loading availability…</p></div>
+    </div>
+    <div class="foot">International Finance Bank Ltd</div>
+  </div>
+
+<script>
+const DEFAULT_SLUG = "initial-prospective-client-video-conference-30-min";
+const slug = (location.pathname.replace(/^\/+/,"").trim()) || DEFAULT_SLUG;
+const TZS = ["Europe/Berlin","Europe/London","Europe/Zurich","Asia/Jerusalem",
+  "Asia/Dubai","Asia/Singapore","Asia/Hong_Kong","Asia/Tokyo","Australia/Sydney",
+  "America/New_York","America/Chicago","America/Los_Angeles","America/Sao_Paulo"];
+
+const state = { tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                etype:null, hostTz:null, days:null, slot:null };
+
+const $ = s => document.querySelector(s);
+const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c;
+  if(h!==undefined)e.innerHTML=h; return e;};
+
+function initTz(){
+  const sel = $("#tz");
+  const opts = Array.from(new Set([state.tz, ...TZS]));
+  sel.innerHTML = opts.map(z=>`<option value="${z}">${z.replace(/_/g," ")}</option>`).join("");
+  sel.value = state.tz;
+  sel.onchange = ()=>{ state.tz = sel.value; loadSlots(); };
+}
+
+function fmtTime(utc, tz){
+  return new Date(utc).toLocaleTimeString("en-GB",
+    {timeZone:tz, hour:"2-digit", minute:"2-digit"});
+}
+function fmtDay(iso){
+  return new Date(iso+"T12:00:00Z").toLocaleDateString("en-GB",
+    {timeZone:"UTC", weekday:"short", day:"numeric", month:"short"});
+}
+function ymd(d, tz){
+  return new Intl.DateTimeFormat("en-CA",
+    {timeZone:tz, year:"numeric", month:"2-digit", day:"2-digit"}).format(d);
+}
+
+async function loadEvent(){
+  try{
+    const r = await fetch(`/api/event-types/${encodeURIComponent(slug)}`);
+    if(!r.ok) throw new Error("event");
+    state.etype = await r.json();
+  }catch(e){
+    $("#head").innerHTML = "<h1>Book a meeting</h1>";
+    $("#stage").innerHTML = `<p class="err">Booking is being set up. Please check back shortly.</p>`;
+    return false;
+  }
+  const e = state.etype;
+  $("#head").innerHTML =
+    `<h1>${e.name}</h1>
+     <div class="meta"><span><b>${e.duration_min} min</b></span>
+       <span>Zoom video call</span>
+       ${e.max_invitees>1?`<span>up to <b>${e.max_invitees}</b> participants</span>`:""}</div>
+     <div class="desc">${e.description_html||""}</div>`;
+  return true;
+}
+
+async function loadSlots(){
+  $("#hosttz").textContent = "";
+  $("#stage").innerHTML = `<p class="note">Loading availability…</p>`;
+  const now = new Date();
+  const to = new Date(now.getTime()+30*864e5);
+  const from = ymd(now, state.tz), toS = ymd(to, state.tz);
+  try{
+    const r = await fetch(`/api/event-types/${encodeURIComponent(slug)}/slots`+
+      `?from=${from}&to=${toS}&tz=${encodeURIComponent(state.tz)}`);
+    if(!r.ok) throw new Error("slots");
+    const data = await r.json();
+    state.days = data.days; state.hostTz = data.host_timezone;
+    $("#hosttz").textContent = state.tz===state.hostTz ? "" :
+      `(also shown as ${state.hostTz.replace(/_/g," ")})`;
+    renderDays();
+  }catch(e){
+    $("#stage").innerHTML = `<p class="err">Availability is not reachable yet. Please check back shortly.</p>`;
+  }
+}
+
+function renderDays(){
+  const days = Object.keys(state.days||{}).sort();
+  const stage = $("#stage"); stage.innerHTML = "";
+  stage.appendChild(el("p","step-label","Choose a day"));
+  if(!days.length){ stage.appendChild(el("p","note","No open times in the next 30 days.")); return; }
+  const list = el("div","days");
+  days.forEach(d=>{
+    const row = el("div","day",
+      `<span>${fmtDay(d)}</span><span class="n">${state.days[d].length} times</span>`);
+    row.onclick = ()=>renderTimes(d);
+    list.appendChild(row);
+  });
+  stage.appendChild(list);
+}
+
+function renderTimes(day){
+  const stage = $("#stage"); stage.innerHTML = "";
+  const back = el("button","back","← back to days"); back.onclick = renderDays;
+  stage.appendChild(back);
+  stage.appendChild(el("p","step-label","Choose a time on "+fmtDay(day)));
+  const grid = el("div","times");
+  state.days[day].forEach(s=>{
+    const main = fmtTime(s.utc, state.tz);
+    const alt = state.tz===state.hostTz ? "" :
+      `<span class="alt">${fmtTime(s.utc, state.hostTz)} Berlin</span>`;
+    const b = el("div","slot", main+alt);
+    b.onclick = ()=>{ state.slot = s; renderForm(); };
+    grid.appendChild(b);
+  });
+  stage.appendChild(grid);
+}
+
+function renderForm(){
+  const e = state.etype, s = state.slot;
+  const stage = $("#stage"); stage.innerHTML = "";
+  const back = el("button","back","← back to times");
+  back.onclick = ()=>renderTimes(Object.keys(state.days).find(d=>state.days[d].includes(s)));
+  stage.appendChild(back);
+
+  const when = `<b>${fmtTime(s.utc,state.tz)}</b>, ${fmtDay(ymd(new Date(s.utc),state.tz))}`+
+    (state.tz===state.hostTz?"":` &nbsp;<span class="note">(${fmtTime(s.utc,state.hostTz)} Berlin)</span>`);
+  stage.appendChild(el("p","tt","Selected: "+when));
+
+  const f = el("div");
+  f.innerHTML = `
+    <div class="field"><label>Your name <span class="req">*</span></label>
+      <input id="f_name" autocomplete="name"></div>
+    <div class="field"><label>Your email <span class="req">*</span></label>
+      <input id="f_email" type="email" autocomplete="email"></div>`;
+  stage.appendChild(f);
+
+  // Guests (group events).
+  if(e.max_invitees>1){
+    const g = el("div");
+    g.innerHTML = `<p class="step-label" style="margin-top:8px">Other participants</p>`;
+    const box = el("div"); box.id="guests";
+    g.appendChild(box);
+    const add = el("button","btn ghost","+ add participant");
+    add.style.padding="8px 14px"; add.style.fontSize="14px";
+    add.onclick = ()=>{
+      if(box.children.length >= e.max_invitees-1) return;
+      const row = el("div","guest",
+        `<input placeholder="Name" class="g_name">
+         <input placeholder="Email (optional)" type="email" class="g_email">
+         <button class="btn ghost" style="padding:8px 12px">✕</button>`);
+      row.querySelector("button").onclick = ()=>row.remove();
+      box.appendChild(row);
+    };
+    g.appendChild(add);
+    stage.appendChild(g);
+  }
+
+  // Intake questions.
+  (e.questions||[]).forEach((q,i)=>{
+    const wrap = el("div","field");
+    const req = q.required ? ' <span class="req">*</span>' : "";
+    let input="";
+    if(q.qtype==="text") input=`<textarea data-q="${i}"></textarea>`;
+    else if(q.qtype==="phone_number") input=`<input data-q="${i}" type="tel">`;
+    else if(q.qtype==="single_select")
+      input=`<select data-q="${i}" style="width:100%">`+
+        (q.answer_choices||[]).map(c=>`<option>${c}</option>`).join("")+`</select>`;
+    else if(q.qtype==="multi_select")
+      input=(q.answer_choices||[]).map(c=>
+        `<label class="note" style="display:block;font-weight:400">
+           <input type="checkbox" data-qm="${i}" value="${c}" style="width:auto"> ${c}</label>`).join("");
+    else input=`<input data-q="${i}">`;
+    wrap.innerHTML = `<label>${q.label}${req}</label>${input}`;
+    stage.appendChild(wrap);
+  });
+
+  const errP = el("p","err"); errP.style.display="none"; stage.appendChild(errP);
+  const submit = el("button","btn gold","Confirm booking");
+  submit.style.marginTop="8px";
+  submit.onclick = ()=>doBook(submit, errP);
+  stage.appendChild(submit);
+}
+
+function collectAnswers(){
+  const e = state.etype, out={};
+  (e.questions||[]).forEach((q,i)=>{
+    if(q.qtype==="multi_select"){
+      const vals=[...document.querySelectorAll(`[data-qm="${i}"]:checked`)].map(x=>x.value);
+      if(vals.length) out[q.label]=vals.join(", ");
+    }else{
+      const node=document.querySelector(`[data-q="${i}"]`);
+      const v=node?node.value.trim():"";
+      if(v) out[q.label]=v;
+    }
+  });
+  return out;
+}
+
+async function doBook(btn, errP){
+  errP.style.display="none";
+  const name=$("#f_name").value.trim(), email=$("#f_email").value.trim();
+  if(!name||!email){ errP.textContent="Please give your name and email."; errP.style.display="block"; return; }
+  // required questions
+  const e=state.etype;
+  for(let i=0;i<(e.questions||[]).length;i++){
+    const q=e.questions[i]; if(!q.required) continue;
+    if(q.qtype==="multi_select"){
+      if(!document.querySelector(`[data-qm="${i}"]:checked`)){ errP.textContent=`Please answer: ${q.label}`; errP.style.display="block"; return; }
+    }else{
+      const n=document.querySelector(`[data-q="${i}"]`);
+      if(!n||!n.value.trim()){ errP.textContent=`Please answer: ${q.label}`; errP.style.display="block"; return; }
+    }
+  }
+  const guests=[...document.querySelectorAll("#guests .guest")].map(r=>({
+    name:r.querySelector(".g_name").value.trim(),
+    email:r.querySelector(".g_email").value.trim()||null
+  })).filter(g=>g.name);
+
+  const payload={ event_slug:slug, start_utc:state.slot.utc, name, email,
+    booker_timezone:state.tz, guests, answers:collectAnswers() };
+
+  btn.disabled=true; btn.textContent="Booking…";
+  try{
+    const r=await fetch("/api/bookings",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    const data=await r.json();
+    if(!r.ok) throw new Error(data.detail||"Could not book");
+    renderConfirmation(data);
+  }catch(err){
+    errP.textContent=err.message||"Could not complete the booking. Please try another time.";
+    errP.style.display="block"; btn.disabled=false; btn.textContent="Confirm booking";
+  }
+}
+
+function renderConfirmation(b){
+  const stage=$("#stage"); stage.innerHTML="";
+  const start=b.start_utc, tz=b.booker_timezone||state.tz, host=b.host_timezone||state.hostTz;
+  const both = tz===host ? "" :
+    `<div class="tt">Berlin: <b>${fmtTime(start,host)}</b>, ${fmtDay(ymd(new Date(start),host))}</div>`;
+  const names=(b.participants||[]).map(p=>p.name).join(", ");
+  stage.appendChild(el("div","ok-card",
+    `<h2 style="margin-top:0">You are booked</h2>
+     <div class="tt"><b>${b.event}</b></div>
+     <div class="tt">${fmtDay(ymd(new Date(start),tz))}, <b>${fmtTime(start,tz)}</b> (${tz.replace(/_/g," ")})</div>
+     ${both}
+     ${names?`<div class="tt" style="margin-top:6px">Participants: ${names}</div>`:""}
+     <p style="margin:14px 0 6px"><a class="btn gold" href="${b.join_url}" style="text-decoration:none">Join the Zoom meeting</a></p>
+     <p class="note">A confirmation is on its way to your inbox, with reminders before the meeting.
+        Need to change it? <a href="/manage?token=${b.manage_token}">Manage your booking</a>.</p>`));
+}
+
+(async function(){
+  initTz();
+  if(await loadEvent()) loadSlots();
+})();
+</script>
+</body>
+</html>

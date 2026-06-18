@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manage your booking - IFB Bank</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--navy:#0a1f44;--gold:#c8a24b;--ink:#1c2230;--muted:#6b7280;
+    --line:#e7e4dd;--bg:#f6f5f2;--card:#fff;--ok:#1a7f4b;--err:#a23a3a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"DM Sans",system-ui,sans-serif;line-height:1.55}
+  h1,h2{font-family:"Cormorant Garamond",Georgia,serif;color:var(--navy);font-weight:600;margin:0 0 .3em}
+  a{color:var(--navy)}
+  .top{background:var(--navy);border-bottom:3px solid var(--gold);padding:16px 22px;color:#fff}
+  .brand{font-family:"Cormorant Garamond",serif;font-size:22px;letter-spacing:.5px}
+  .wrap{max-width:560px;margin:28px auto;padding:0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:26px}
+  .tt{font-size:15px;margin:4px 0}
+  .tt b{color:var(--navy)}
+  .badge{display:inline-block;font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px;letter-spacing:.04em}
+  .b-scheduled{background:#eef6f0;color:var(--ok)}
+  .b-cancelled{background:#fbeeee;color:var(--err)}
+  .b-no_show{background:#fff5e6;color:#9a6b00}
+  .btn{background:var(--navy);color:#fff;border:none;border-radius:8px;padding:11px 18px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-block}
+  .btn.gold{background:var(--gold);color:#1a1300}
+  .btn.ghost{background:#fff;color:var(--err);border:1px solid var(--line)}
+  .err{color:var(--err);font-size:14px}
+  .note{color:var(--muted);font-size:13px}
+  .hr{height:1px;background:var(--line);margin:18px 0}
+</style>
+</head>
+<body>
+  <div class="top"><span class="brand">IFB Bank</span></div>
+  <div class="wrap"><div class="card" id="stage"><p class="note">Loading…</p></div></div>
+<script>
+const token=new URLSearchParams(location.search).get("token");
+const $=s=>document.querySelector(s);
+function fmt(utc,tz){return new Date(utc).toLocaleString("en-GB",
+  {timeZone:tz,weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}
+
+async function load(){
+  if(!token){ $("#stage").innerHTML=`<p class="err">No booking reference in the link.</p>`; return; }
+  try{
+    const r=await fetch(`/api/bookings/${encodeURIComponent(token)}`);
+    if(!r.ok) throw 0;
+    render(await r.json());
+  }catch(e){ $("#stage").innerHTML=`<p class="err">We could not find that booking. The link may have expired.</p>`; }
+}
+
+function render(b){
+  const tz=b.booker_timezone, host=b.host_timezone;
+  const both = tz===host ? "" : `<p class="tt note">Berlin: ${fmt(b.start_utc,host)}</p>`;
+  const cls={scheduled:"b-scheduled",canceled:"b-cancelled",no_show:"b-no_show",completed:"b-scheduled"}[b.status]||"b-scheduled";
+  let action="";
+  if(b.status==="scheduled"){
+    action=`<div class="hr"></div>
+      <a class="btn gold" href="${b.join_url}">Join the Zoom meeting</a>
+      <p style="margin-top:16px"><button class="btn ghost" id="cancel">Cancel this booking</button></p>`;
+  }else if(b.status==="canceled"){
+    action=`<div class="hr"></div><p class="tt">This booking is cancelled.</p>
+      <a class="btn" href="${b.rebook_url||'/'}">Book a new time</a>`;
+  }
+  $("#stage").innerHTML=`
+    <h1>${b.event}</h1>
+    <p><span class="badge ${cls}">${b.status}</span></p>
+    <p class="tt"><b>${fmt(b.start_utc,tz)}</b> (${tz.replace(/_/g," ")})</p>
+    ${both}${action}`;
+  const c=$("#cancel");
+  if(c) c.onclick=async()=>{
+    c.disabled=true; c.textContent="Cancelling…";
+    try{
+      const r=await fetch(`/api/bookings/${encodeURIComponent(token)}/cancel`,{method:"POST"});
+      if(!r.ok) throw 0;
+      load();
+    }catch(e){ c.disabled=false; c.textContent="Cancel this booking";
+      $("#stage").insertAdjacentHTML("beforeend",`<p class="err">Could not cancel. Please try again.</p>`); }
+  };
+}
+load();
+</script>
+</body>
+</html>

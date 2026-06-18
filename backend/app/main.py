@@ -64,6 +64,7 @@ async def get_event_type(slug: str):
         "slug": et["slug"], "name": et["name"],
         "description_html": et["description_html"],
         "duration_min": et["duration_min"], "kind": et["kind"],
+        "max_invitees": et["max_invitees"],
         "color": et["color"], "is_paid": et["is_paid"],
         "questions": [dict(q) for q in qs],
     }
@@ -142,6 +143,9 @@ async def get_booking(token: str):
         raise HTTPException(404, "Not found")
     return {
         "event": b["event_name"], "status": b["status"],
+        "start_utc": b["start_utc"].isoformat(),
+        "booker_timezone": b["booker_timezone"], "host_timezone": b["host_timezone"],
+        "participants": b["participants"],
         "times": render_dual(b["start_utc"], b["booker_timezone"], b["host_timezone"]),
         "join_url": b["location_url"],
         "rebook_url": f"{settings.public_site_url}/{b['event_slug']}",

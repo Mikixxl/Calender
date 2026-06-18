@@ -18,9 +18,9 @@ class Settings:
 
     # Public URLs used to build links inside emails.
     public_api_url: str = os.environ.get("PUBLIC_API_URL", "https://ifb-scheduler.fly.dev")
-    public_site_url: str = os.environ.get("PUBLIC_SITE_URL", "https://book.ifcifb.com")
+    public_site_url: str = os.environ.get("PUBLIC_SITE_URL", "https://calender.ifcifb.com")
 
-    cors_origins: str = os.environ.get("CORS_ORIGINS", "*")
+    cors_origins: str = os.environ.get("CORS_ORIGINS", "https://calender.ifcifb.com")
 
 
 settings = Settings()
