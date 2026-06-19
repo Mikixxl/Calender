@@ -26,9 +26,20 @@ GOLD = "#c8a24b"
 
 def _shell(title: str, body_html: str) -> str:
     return f"""<div style="font-family:Georgia,'Times New Roman',serif;max-width:580px;margin:0 auto;color:#1a1a1a;background:#ffffff">
-  <div style="background:{NAVY};padding:22px 28px;border-bottom:3px solid {GOLD}">
-    <div style="color:#fff;font-size:19px;letter-spacing:.5px;font-weight:600">International Finance Bank</div>
-    <div style="color:{GOLD};font-size:12px;letter-spacing:1.5px;margin-top:2px">BANQUE FINANCIERE INTERNATIONALE</div>
+  <div style="background:{NAVY};padding:18px 28px;border-bottom:3px solid {GOLD}">
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tr>
+      <td style="vertical-align:middle">
+        <div style="color:#fff;font-size:19px;letter-spacing:.5px;font-weight:600">International Finance Bank</div>
+        <div style="color:{GOLD};font-size:12px;letter-spacing:1.5px;margin-top:2px">BANQUE FINANCIERE INTERNATIONALE</div>
+      </td>
+      <td style="vertical-align:middle;text-align:right;width:100px">
+        <table cellpadding="0" cellspacing="0" align="right" style="display:inline-table;border-collapse:separate"><tr>
+          <td style="background:#ffffff;border-radius:6px;padding:7px">
+            <img src="{settings.public_site_url}/ifb-logo.jpg" alt="IFB" width="72" style="width:72px;height:auto;display:block;border:0" />
+          </td>
+        </tr></table>
+      </td>
+    </tr></table>
   </div>
   <div style="padding:28px">
     <h2 style="color:{NAVY};font-size:21px;margin:0 0 16px;font-weight:600">{title}</h2>
@@ -56,6 +67,19 @@ def _btn(url: str, label: str, bg: str = NAVY) -> str:
     return (f'<a href="{url}" style="display:inline-block;background:{bg};color:{fg};'
             f'text-decoration:none;padding:11px 20px;border-radius:6px;font-size:14px;'
             f'font-weight:600;margin:4px 8px 4px 0">{label}</a>')
+
+
+def _reminder_when(start_utc: datetime) -> str:
+    """How far off the meeting is, in plain words: a 24h reminder reads
+    'tomorrow', a 30-minute reminder reads 'in approximately 30 minutes'."""
+    mins = (start_utc - datetime.now(timezone.utc)).total_seconds() / 60
+    if mins >= 18 * 60:
+        return "tomorrow"
+    if mins >= 90:
+        return f"in approximately {round(mins / 60)} hours"
+    if mins >= 20:
+        return "in approximately 30 minutes"
+    return "shortly"
 
 
 
@@ -169,8 +193,8 @@ def build_booker_message(ntype: str, ctx: dict) -> tuple[str, str, str]:
             f"<p>Dear {name},</p>"
             f"<p>{lead}</p>"
             f"{zoom}"
-            f"<p style='font-size:14px;color:#444'>Please be punctual. You will receive an email "
-            f"reminder 30 minutes before the meeting begins.</p>"
+            f"<p style='font-size:14px;color:#444'>Please be punctual. You will receive email "
+            f"reminders the day before and 30 minutes before the meeting begins.</p>"
             f"<p style='font-size:14px;color:#444'>If you are unable to attend, please reschedule to "
             f"a later time. You may reschedule at any point up to 15 minutes before the meeting.</p>"
             f"<p style='margin-top:18px'>{_btn(manage, 'Reschedule or cancel')}</p>"
@@ -182,8 +206,9 @@ def build_booker_message(ntype: str, ctx: dict) -> tuple[str, str, str]:
     if ntype == "reminder":
         zoom = _zoom_block(ctx["start_utc"], ctx["end_utc"], ctx["booker_tz"],
                            ctx["host_tz"], join, ev, names)
+        when = _reminder_when(ctx["start_utc"])
         body = (f"<p>Dear {name},</p><p>A reminder of your upcoming <strong>{ev}</strong>. "
-                f"It begins in approximately 30 minutes.</p>"
+                f"It begins {when}.</p>"
                 f"{zoom}"
                 f"<p style='font-size:14px;color:#444'>If you can no longer attend, you may reschedule "
                 f"up to 15 minutes before the meeting.</p>"
