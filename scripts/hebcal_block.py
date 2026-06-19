@@ -61,7 +61,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def fetch_hebcal(start_date: str, end_date: str) -> list[dict]:
-    """Full Jewish-calendar feed for Berlin with candle-lighting + havdalah."""
+    """Full Jewish-calendar feed for Berlin; retries on 429/5xx/transient."""
     params = {
         "v": 1,
         "cfg": "json",
@@ -81,9 +81,23 @@ def fetch_hebcal(start_date: str, end_date: str) -> list[dict]:
         "s": "off",     # no parashat clutter
         "leyning": "off",
     }
-    r = requests.get(HEBCAL_URL, params=params, timeout=HTTP_TIMEOUT)
-    r.raise_for_status()
-    return r.json().get("items", []) or []
+    import time as _time
+    headers = {"User-Agent": "ifb-scheduler-hebcal/1.0 (ops@ifcifb.com)"}
+    last = "unknown"
+    for attempt in range(4):
+        try:
+            r = requests.get(HEBCAL_URL, params=params, timeout=HTTP_TIMEOUT,
+                             headers=headers)
+            if r.status_code == 429 or r.status_code >= 500:
+                last = f"HTTP {r.status_code}"
+                _time.sleep(8 * (attempt + 1) ** 2)
+                continue
+            r.raise_for_status()
+            return r.json().get("items", []) or []
+        except requests.RequestException as e:
+            last = str(e)[:200]
+            _time.sleep(8 * (attempt + 1) ** 2)
+    raise RuntimeError(f"hebcal fetch failed after retries: {last}")
 
 
 def _parse_dt(value: str) -> datetime | None:
@@ -214,8 +228,22 @@ async def main() -> None:
         print(f"  ... (+{len(spans) - 6} more)")
 
     if not spans:
-        print("no spans computed - aborting without writes", file=sys.stderr)
-        sys.exit(1)
+        msg = (f"no spans computed; raw_items={len(items)} "
+               "(likely transient/rate-limit) - preserving existing busy_blocks")
+        print(msg, file=sys.stderr)
+        if not dry and os.environ.get("DATABASE_URL"):
+            try:
+                c = await asyncpg.connect(os.environ["DATABASE_URL"],
+                                          statement_cache_size=0)
+                try:
+                    await c.execute(
+                        "insert into sched.hebcal_diag (spans,created,skipped,"
+                        "failed,note) values (0,0,0,0,$1)", msg)
+                finally:
+                    await c.close()
+            except Exception as exc:  # noqa: BLE001
+                print(f"diag write failed: {exc}", file=sys.stderr)
+        return
 
     if dry:
         print("DRY RUN - no DB or calendar writes")
