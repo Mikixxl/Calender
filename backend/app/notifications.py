@@ -11,6 +11,7 @@ Every time is rendered in the booker's zone, Berlin and UTC, so nothing is
 ambiguous in an inbox.
 """
 import asyncio
+import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -56,6 +57,17 @@ def _btn(url: str, label: str, bg: str = NAVY) -> str:
             f'text-decoration:none;padding:11px 20px;border-radius:6px;font-size:14px;'
             f'font-weight:600;margin:4px 8px 4px 0">{label}</a>')
 
+
+
+def _coerce(v):
+    """jsonb may arrive as a JSON string from legacy double-encoded rows; turn
+    it back into a Python object so .get()/.items() are always safe."""
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except Exception:  # noqa: BLE001
+            return v
+    return v
 
 def _participant_names(ctx: dict) -> str:
     ps = ctx.get("participants") or []
@@ -229,7 +241,7 @@ def _ctx_from_booking(booking, etype, *, rescheduled: bool = False) -> dict:
         "booker_tz": booking["booker_timezone"], "host_tz": booking["host_timezone"],
         "location_url": booking["location_url"], "cancel_token": booking["cancel_token"],
         "event_name": etype["name"], "event_slug": etype["slug"],
-        "answers": booking["answers"], "participants": booking["participants"],
+        "answers": _coerce(booking["answers"]), "participants": _coerce(booking["participants"]),
         "rescheduled": rescheduled,
     }
 
@@ -354,7 +366,7 @@ async def process_due(limit: int = 50) -> dict:
             "booker_tz": r["booker_timezone"], "host_tz": r["host_timezone"],
             "location_url": r["location_url"], "cancel_token": r["cancel_token"],
             "event_name": r["event_name"], "event_slug": r["event_slug"],
-            "answers": r["answers"], "participants": r["participants"],
+            "answers": _coerce(r["answers"]), "participants": _coerce(r["participants"]),
         }
         try:
             subject, html, text = build_booker_message(r["ntype"], ctx)

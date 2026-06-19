@@ -128,7 +128,7 @@ async def create_booking(payload) -> dict:
                        returning *""",
                     et["id"], start, end, payload.name, str(payload.email),
                     payload.booker_timezone, schedule.timezone, join_url,
-                    json.dumps(payload.answers or {}), json.dumps(participants),
+                    json.dumps(payload.answers or {}), participants,
                 )
             except Exception as exc:  # unique_violation -> already taken
                 if "bookings_no_double_book" in str(exc):
@@ -233,7 +233,7 @@ async def create_pending_paid(payload) -> dict:
                    returning *""",
                 et["id"], start, end, payload.name, str(payload.email),
                 payload.booker_timezone, schedule.timezone,
-                json.dumps(payload.answers or {}), json.dumps(participants),
+                json.dumps(payload.answers or {}), participants,
                 et["price_cents"], et["currency"] or settings.paypal_currency, expires,
             )
     return {"booking": booking, "et": et}
