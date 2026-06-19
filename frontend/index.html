@@ -510,17 +510,19 @@ function renderConfirmation(b){
   const stage=$("#stage"); stage.innerHTML="";
   const start=b.start_utc, tz=b.booker_timezone||state.tz, host=b.host_timezone||state.hostTz;
   const both = tz===host ? "" :
-    `<div class="tt">Berlin: <b>${fmtTime(start,host)}</b>, ${fmtDay(ymd(new Date(start),host))}</div>`;
+    `<div class="tt note">Berlin: <b>${fmtTime(start,host)}</b>, ${fmtDay(ymd(new Date(start),host))}</div>`;
   const names=(b.participants||[]).map(p=>p.name).join(", ");
+  const manage=`/manage?token=${b.manage_token}`;
   stage.appendChild(el("div","ok-card",
-    `<h2 style="margin-top:0">You are booked</h2>
-     <div class="tt"><b>${b.event}</b></div>
+    `<h2 style="margin-top:0">Thank you for your booking</h2>
+     <p class="tt">Thank you for your booking for <b>${b.event}</b>. Your meeting is confirmed.</p>
      <div class="tt">${fmtDay(ymd(new Date(start),tz))}, <b>${fmtTime(start,tz)}</b> (${tz.replace(/_/g," ")})</div>
      ${both}
      ${names?`<div class="tt" style="margin-top:6px">Participants: ${names}</div>`:""}
-     <p style="margin:14px 0 6px"><a class="btn gold" href="${b.join_url}" style="text-decoration:none">Join the Zoom meeting</a></p>
-     <p class="note">A confirmation is on its way to your inbox, with reminders before the meeting.
-        Need to change it? <a href="/manage?token=${b.manage_token}">Manage your booking</a>.</p>`));
+     <p style="margin:16px 0 6px"><a class="btn gold" href="${b.join_url}" style="text-decoration:none">Join the Zoom meeting</a></p>
+     <p class="note" style="margin-top:14px">Please be punctual. You will receive an email reminder 30 minutes before the meeting begins. A confirmation with the full Zoom details has been sent to your inbox.</p>
+     <p class="note">If you are unable to attend, please reschedule to a later time. You may reschedule at any point up to 15 minutes before the meeting.</p>
+     <p style="margin-top:14px"><a class="btn ghost" href="${manage}" style="text-decoration:none">Reschedule or cancel</a></p>`));
 }
 
 (async function(){

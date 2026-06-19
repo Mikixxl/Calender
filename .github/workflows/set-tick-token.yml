@@ -1,0 +1,21 @@
+name: set-tick-token
+on:
+  workflow_dispatch: {}
+
+jobs:
+  set:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Push TICK_TOKEN to Fly
+        env:
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$FLY_API_TOKEN" ]; then echo "FLY_API_TOKEN missing"; exit 1; fi
+          if [ -z "$TICK_TOKEN" ]; then echo "TICK_TOKEN secret missing"; exit 1; fi
+          flyctl secrets set TICK_TOKEN="$TICK_TOKEN" -a ifb-scheduler
+          echo "TICK_TOKEN synced to Fly."

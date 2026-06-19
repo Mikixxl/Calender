@@ -160,6 +160,15 @@ async def create_booking(payload) -> dict:
         except Exception as exc:  # noqa: BLE001 - calendar mirror is best-effort
             print(f"[gcal] mirror create failed: {exc!r}")
 
+        # Send the confirmation immediately - the booker has the Zoom link in
+        # hand the moment they finish, independent of the tick. Best-effort:
+        # send_confirmation_sync swallows its own errors and the queued row
+        # stays as a fallback for the tick if the live send fails.
+        try:
+            await notifications.send_confirmation_sync(booking, et)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[mail] create_booking sync send failed: {exc!r}")
+
     return {
         "id": str(booking["id"]),
         "event": et["name"],
@@ -275,3 +284,109 @@ async def finalize_paid_booking(conn, booking_id, capture_id: str) -> dict:
     )
     await notifications.queue_for_booking(conn, booking, et)
     return {"booking": booking, "et": et}
+
+
+# --------------------------------------------------------------------------
+# Reschedule: move a scheduled booking to a new time, up to 15 minutes before
+# the current start. The Zoom link is kept; reminders are re-queued; the
+# calendar mirror is moved; an updated confirmation goes out at once.
+# --------------------------------------------------------------------------
+async def reschedule_booking(token: str, new_start_utc) -> dict:
+    start = new_start_utc
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    pool = await db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            b = await conn.fetchrow(
+                """select b.*, e.slug as event_slug from sched.bookings b
+                     join sched.event_types e on e.id = b.event_type_id
+                    where b.cancel_token=$1 for update""",
+                token,
+            )
+            if b is None:
+                raise BookingError(404, "Booking not found")
+            if b["status"] != "scheduled":
+                raise BookingError(409, "Only a scheduled booking can be rescheduled")
+            # The cutoff is measured against the CURRENT start: no moves inside
+            # the final 15 minutes.
+            if now >= b["start_utc"] - timedelta(minutes=15):
+                raise BookingError(
+                    409, "It is too late to reschedule this meeting (within 15 minutes of the start)")
+
+            et, schedule, cfg = await _load_context(conn, b["event_slug"])
+
+            host_date = start.astimezone(ZoneInfo(schedule.timezone)).date()
+            busy = await _busy_for_day(conn, host_date, schedule.timezone)
+            valid = generate_slots(schedule, cfg, busy, now, only_date=host_date)
+            if not any(abs((start - s).total_seconds()) < 1 for s in valid):
+                raise BookingError(409, "That slot is no longer available")
+
+            clash = await conn.fetchrow(
+                """select 1 from sched.bookings
+                    where event_type_id=$1 and start_utc=$2 and id<>$3
+                      and (status='scheduled'
+                           or (status='pending_payment' and pending_expires_at > now()))
+                    limit 1""",
+                b["event_type_id"], start, b["id"],
+            )
+            if clash is not None:
+                raise BookingError(409, "That slot was just taken")
+
+            end = start + timedelta(minutes=et["duration_min"])
+            old_gcal = b["gcal_event_id"]
+            try:
+                booking = await conn.fetchrow(
+                    "update sched.bookings set start_utc=$2, end_utc=$3 where id=$1 returning *",
+                    b["id"], start, end,
+                )
+            except Exception as exc:  # unique_violation -> already taken
+                if "bookings_no_double_book" in str(exc):
+                    raise BookingError(409, "That slot was just taken")
+                raise
+
+            # Same Zoom link stays valid; refresh the reminder schedule.
+            await notifications.requeue_reminders(conn, booking, et)
+
+        # Post-commit, best-effort: move the calendar mirror.
+        try:
+            names = [p["name"].strip() for p in (booking["participants"] or [])
+                     if isinstance(p, dict) and p.get("name") and p["name"].strip()]
+            cal_summary = (", ".join(names) if names else et["name"])[:190]
+            cal_desc = (f'{et["name"]}\n'
+                        f'Booked by: {booking["booker_name"]} <{booking["booker_email"]}>\n'
+                        f'Join: {booking["location_url"]}')
+            new_id = await gcal.create_event(
+                cal_summary, booking["start_utc"], et["duration_min"],
+                description=cal_desc, location=booking["location_url"],
+            )
+            if new_id:
+                await conn.execute(
+                    "update sched.bookings set gcal_event_id=$1 where id=$2",
+                    new_id, booking["id"],
+                )
+            if old_gcal:
+                await gcal.delete_event(old_gcal)
+        except Exception as exc:  # noqa: BLE001 - mirror move is best-effort
+            print(f"[gcal] reschedule mirror failed: {exc!r}")
+
+        # Updated confirmation, sent at once.
+        try:
+            await notifications.send_confirmation_sync(booking, et, rescheduled=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[mail] reschedule confirmation failed: {exc!r}")
+
+    return {
+        "id": str(booking["id"]),
+        "event": et["name"],
+        "start_utc": booking["start_utc"].isoformat(),
+        "end_utc": booking["end_utc"].isoformat(),
+        "join_url": booking["location_url"],
+        "participants": booking["participants"],
+        "manage_token": str(booking["cancel_token"]),
+        "booker_timezone": booking["booker_timezone"],
+        "host_timezone": booking["host_timezone"],
+    }

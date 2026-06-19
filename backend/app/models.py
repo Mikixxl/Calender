@@ -24,3 +24,7 @@ class AttendanceMark(BaseModel):
 
 class CaptureRequest(BaseModel):
     order_id: str
+
+
+class RescheduleRequest(BaseModel):
+    start_utc: datetime                     # the new chosen slot, UTC

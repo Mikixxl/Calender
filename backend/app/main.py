@@ -19,11 +19,11 @@ from .availability import (
 )
 from .booking import (
     BookingError, create_booking, _load_context, _busy_for_day,
-    create_pending_paid, finalize_paid_booking,
+    create_pending_paid, finalize_paid_booking, reschedule_booking,
 )
 from .gcal import external_busy
 from .config import settings
-from .models import BookingCreate, CaptureRequest
+from .models import BookingCreate, CaptureRequest, RescheduleRequest
 
 app = FastAPI(title="IFB Scheduler", version="0.1")
 
@@ -254,6 +254,13 @@ async def paypal_capture_order(req: CaptureRequest):
     except Exception as exc:  # noqa: BLE001 - calendar mirror is best-effort
         print(f"[gcal] paid mirror create failed: {exc!r}")
 
+    # Send the premium confirmation immediately - a paid booker must receive the
+    # Zoom details at once, never waiting on the tick. Best-effort.
+    try:
+        await notifications.send_confirmation_sync(booking, et)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[mail] paid sync send failed: {exc!r}")
+
     return {
         "id": str(booking["id"]),
         "event": et["name"],
@@ -284,6 +291,7 @@ async def get_booking(token: str):
         "participants": b["participants"],
         "times": render_dual(b["start_utc"], b["booker_timezone"], b["host_timezone"]),
         "join_url": b["location_url"],
+        "event_slug": b["event_slug"],
         "rebook_url": f"{settings.public_site_url}/{b['event_slug']}",
     }
 
@@ -312,6 +320,14 @@ async def cancel_booking(token: str):
         except Exception as exc:  # noqa: BLE001 - mirror cleanup is best-effort
             print(f"[gcal] mirror delete failed: {exc!r}")
     return {"ok": True, "status": "canceled"}
+
+
+@app.post("/api/bookings/{token}/reschedule")
+async def reschedule(token: str, req: RescheduleRequest):
+    try:
+        return await reschedule_booking(token, req.start_utc)
+    except BookingError as e:
+        raise HTTPException(e.status, e.message)
 
 
 # -------------------------------------------------------------------------

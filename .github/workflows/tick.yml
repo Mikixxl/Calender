@@ -1,0 +1,24 @@
+name: tick
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process due notifications
+        env:
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$TICK_TOKEN" ]; then echo "TICK_TOKEN not set; nothing to do."; exit 0; fi
+          code=$(curl -s -o /tmp/out -w '%{http_code}' -X POST \
+            "https://ifb-scheduler.fly.dev/internal/tick?token=${TICK_TOKEN}")
+          echo "HTTP $code"; cat /tmp/out 2>/dev/null; echo
+          case "$code" in 200) echo "tick ok";; *) echo "tick failed"; exit 1;; esac
