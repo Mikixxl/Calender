@@ -243,25 +243,37 @@ async def main() -> None:
             for r in await conn.fetch("select span_key from sched.hebcal_events")
         }
         created = skipped = failed = 0
+        first_err = None
         for span in spans:
             if span["span_key"] in existing:
                 skipped += 1
                 continue
             try:
                 ev_id = gcal_create(api_key, span)
+                await conn.execute(
+                    """insert into sched.hebcal_events
+                           (span_key, gcal_event_id, start_utc, end_utc, title)
+                       values ($1, $2, $3, $4, $5)
+                       on conflict (span_key) do nothing""",
+                    span["span_key"], ev_id, span["start"], span["end"], span["title"],
+                )
+                created += 1
             except Exception as exc:  # noqa: BLE001 - best-effort, never fatal
                 failed += 1
-                print(f"  [gcal fail] {span['span_key']}: {exc}", file=sys.stderr)
-                continue
-            await conn.execute(
-                """insert into sched.hebcal_events
-                       (span_key, gcal_event_id, start_utc, end_utc, title)
-                   values ($1, $2, $3, $4, $5)
-                   on conflict (span_key) do nothing""",
-                span["span_key"], ev_id, span["start"], span["end"], span["title"],
-            )
-            created += 1
+                if first_err is None:
+                    first_err = f"{type(exc).__name__}: {exc}"[:500]
+                print(f"  [gcal/ledger fail] {span['span_key']}: {exc}", file=sys.stderr)
         print(f"gcal events: created={created} skipped={skipped} failed={failed}")
+        if first_err:
+            print(f"first_err: {first_err}", file=sys.stderr)
+        try:
+            await conn.execute(
+                "insert into sched.hebcal_diag (spans, created, skipped, failed, note) "
+                "values ($1,$2,$3,$4,$5)",
+                len(spans), created, skipped, failed, first_err,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"diag write failed: {exc}", file=sys.stderr)
     finally:
         await conn.close()
     print("hebcal block sync complete")
