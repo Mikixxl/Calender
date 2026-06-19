@@ -114,3 +114,14 @@ jobs:
           done
           if [ -z "$ok" ]; then echo "Netlify->Fly proxy did not return the event; check netlify.toml"; exit 1; fi
           echo "PUBLIC PATH VERIFIED: calender.ifcifb.com booking page is live."
+
+      - name: Verify PayPal paywall is armed
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -e
+          API="https://ifb-scheduler.fly.dev"
+          body=$(curl -s --max-time 15 "$API/api/paypal/config" || true)
+          echo "paypal config: $body"
+          echo "$body" | grep -q '"ready":true' \
+            || { echo "PayPal not armed (ready != true) - check PAYPAL_* secrets"; exit 1; }
+          echo "PAYPAL PAYWALL ARMED: live credentials staged and reachable."
