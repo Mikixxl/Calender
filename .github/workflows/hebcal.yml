@@ -1,0 +1,31 @@
+name: hebcal-block
+
+on:
+  schedule:
+    - cron: "20 3 * * *"   # daily 03:20 UTC; refreshes the rolling horizon
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute and print spans only (no DB or calendar writes)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: hebcal-block
+  cancel-in-progress: false
+
+jobs:
+  block:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "asyncpg==0.30.0" "requests>=2.31,<3"
+      - name: Hebcal -> busy_blocks + Google Calendar
+        env:
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          HEBCAL_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python scripts/hebcal_block.py
