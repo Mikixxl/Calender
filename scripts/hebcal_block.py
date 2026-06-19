@@ -279,5 +279,28 @@ async def main() -> None:
     print("hebcal block sync complete")
 
 
+async def _guarded() -> None:
+    try:
+        await main()
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()[:4000]
+        url = os.environ.get("DATABASE_URL")
+        if url:
+            try:
+                c = await asyncpg.connect(url, statement_cache_size=0)
+                try:
+                    await c.execute(
+                        "insert into sched.hebcal_diag (spans,created,skipped,failed,note) "
+                        "values (0,0,0,0,$1)",
+                        "TRACEBACK: " + tb,
+                    )
+                finally:
+                    await c.close()
+            except Exception:
+                pass
+        raise
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(_guarded())
