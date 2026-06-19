@@ -184,11 +184,15 @@ async def paypal_capture_order(req: CaptureRequest):
     if not paypal.configured():
         raise HTTPException(503, "Payment is not configured")
     b = await db.fetchrow(
-        "select id, amount_cents, currency from sched.bookings where paypal_order_id=$1",
+        "select id, status, amount_cents, currency from sched.bookings "
+        "where paypal_order_id=$1",
         req.order_id,
     )
     if b is None:
         raise HTTPException(404, "Unknown order")
+    if b["status"] != "pending_payment":
+        # Already finalized, or the hold was released. Never capture twice.
+        raise HTTPException(409, "This booking is no longer awaiting payment")
 
     try:
         cap = await paypal.capture_order(req.order_id)
@@ -196,6 +200,14 @@ async def paypal_capture_order(req: CaptureRequest):
         raise HTTPException(502, f"Capture failed: {exc}")
 
     status, capture_id, currency, value = paypal.extract_capture(cap)
+
+    async def _refund_quietly():
+        try:
+            if capture_id:
+                await paypal.refund(capture_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[paypal] refund failed for capture {capture_id}: {exc!r}")
+
     if status != "COMPLETED":
         raise HTTPException(402, f"Payment not completed (status {status})")
 
@@ -203,7 +215,8 @@ async def paypal_capture_order(req: CaptureRequest):
     amount_ok = value is not None and f"{float(value):.2f}" == expected
     currency_ok = not (currency and b["currency"]) or currency == b["currency"]
     if not (amount_ok and currency_ok):
-        raise HTTPException(409, "Payment amount mismatch")
+        await _refund_quietly()
+        raise HTTPException(409, "Payment amount mismatch; you have been refunded")
 
     pool = await db.get_pool()
     async with pool.acquire() as conn:
@@ -211,16 +224,14 @@ async def paypal_capture_order(req: CaptureRequest):
             try:
                 res = await finalize_paid_booking(conn, b["id"], capture_id)
             except BookingError as e:
+                # Money captured but the meeting cannot be created: always refund.
+                await _refund_quietly()
                 if e.message == "slot_taken":
-                    try:
-                        if capture_id:
-                            await paypal.refund(capture_id)
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[paypal] refund after slot clash failed: {exc!r}")
                     raise HTTPException(
                         409, "That slot was just taken; your payment has been "
                              "refunded. Please choose another time.")
-                raise HTTPException(e.status, e.message)
+                raise HTTPException(
+                    e.status, f"{e.message}; your payment has been refunded")
 
     booking, et = res["booking"], res["et"]
     # Best-effort calendar mirror, after commit (mirrors the free path).
