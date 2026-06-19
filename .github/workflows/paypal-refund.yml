@@ -1,0 +1,32 @@
+name: paypal-refund
+on:
+  workflow_dispatch:
+    inputs:
+      capture_id:
+        description: 'PayPal capture ID to fully refund'
+        required: true
+jobs:
+  refund:
+    runs-on: ubuntu-latest
+    env:
+      PAYPAL_CLIENT_ID: ${{ secrets.PAYPAL_CLIENT_ID }}
+      PAYPAL_CLIENT_SECRET: ${{ secrets.PAYPAL_CLIENT_SECRET }}
+      PAYPAL_ENV: ${{ secrets.PAYPAL_ENV }}
+      CAPTURE_ID: ${{ inputs.capture_id }}
+    steps:
+      - name: Full refund by capture id
+        run: |
+          set -e
+          if [ "${PAYPAL_ENV:-live}" = "sandbox" ]; then BASE="https://api-m.sandbox.paypal.com"; else BASE="https://api-m.paypal.com"; fi
+          echo "env=${PAYPAL_ENV} base=${BASE} capture=${CAPTURE_ID}"
+          TOKEN=$(curl -s "$BASE/v1/oauth2/token" -u "$PAYPAL_CLIENT_ID:$PAYPAL_CLIENT_SECRET" \
+            -H "Accept: application/json" -d "grant_type=client_credentials" \
+            | python3 -c "import sys,json;print(json.load(sys.stdin).get('access_token',''))")
+          if [ -z "$TOKEN" ]; then echo "OAuth failed"; exit 1; fi
+          RESP=$(curl -s -w '\n%{http_code}' -X POST "$BASE/v2/payments/captures/${CAPTURE_ID}/refund" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}')
+          CODE=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
+          echo "HTTP $CODE"; echo "$BODY"
+          case "$CODE" in 200|201) ;; *) echo "refund failed"; exit 1;; esac
+          echo "$BODY" | grep -Eq '"status":\s*"(COMPLETED|PENDING)"' || { echo "unexpected refund status"; exit 1; }
+          echo "REFUND OK"
