@@ -42,5 +42,14 @@ class Settings:
     composio_gcal_user: str = os.environ.get("COMPOSIO_GCAL_USER", "scheduler-private")
     gcal_calendar_id: str = os.environ.get("GCAL_CALENDAR_ID", "primary")
 
+    # PayPal - the paywall on the paid event types. A paid booking is finalized
+    # (Zoom minted, row flipped to scheduled, mail sent) only after a capture
+    # comes back COMPLETED. Secrets live in the environment, never in the repo.
+    paypal_env: str = os.environ.get("PAYPAL_ENV", "live")            # 'live' | 'sandbox'
+    paypal_client_id: str = os.environ.get("PAYPAL_CLIENT_ID", "")
+    paypal_client_secret: str = os.environ.get("PAYPAL_CLIENT_SECRET", "")
+    paypal_currency: str = os.environ.get("PAYPAL_CURRENCY", "EUR")
+    paypal_pending_minutes: int = int(os.environ.get("PAYPAL_PENDING_MINUTES", "15"))
+
 
 settings = Settings()

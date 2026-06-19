@@ -12,15 +12,18 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from . import db, notifications, gcal
+from . import db, notifications, gcal, paypal
 from .availability import (
     EventTypeConfig, Schedule, WeeklyRule, DateOverride, Interval,
     generate_slots, render_dual,
 )
-from .booking import BookingError, create_booking, _load_context, _busy_for_day
+from .booking import (
+    BookingError, create_booking, _load_context, _busy_for_day,
+    create_pending_paid, finalize_paid_booking,
+)
 from .gcal import external_busy
 from .config import settings
-from .models import BookingCreate
+from .models import BookingCreate, CaptureRequest
 
 app = FastAPI(title="IFB Scheduler", version="0.1")
 
@@ -67,6 +70,7 @@ async def get_event_type(slug: str):
         "duration_min": et["duration_min"], "kind": et["kind"],
         "max_invitees": et["max_invitees"],
         "color": et["color"], "is_paid": et["is_paid"],
+        "price_cents": et["price_cents"], "currency": et["currency"],
         "questions": [dict(q) for q in qs],
     }
 
@@ -106,7 +110,9 @@ async def list_slots(
                    ).astimezone(timezone.utc)
         rows = await conn.fetch(
             """select start_utc, end_utc from sched.bookings
-                where status='scheduled' and end_utc > $1 and start_utc < $2""",
+                where (status='scheduled'
+                       or (status='pending_payment' and pending_expires_at > now()))
+                  and end_utc > $1 and start_utc < $2""",
             win_start, win_end,
         )
         busy = [Interval(r["start_utc"], r["end_utc"]) for r in rows]
@@ -131,6 +137,123 @@ async def post_booking(payload: BookingCreate):
         return await create_booking(payload)
     except BookingError as e:
         raise HTTPException(e.status, e.message)
+
+
+# -------------------------------------------------------------------------
+# PayPal paywall - paid event types only. The free path above refuses them.
+# -------------------------------------------------------------------------
+@app.get("/api/paypal/config")
+async def paypal_config():
+    return {
+        "client_id": settings.paypal_client_id,
+        "currency": settings.paypal_currency,
+        "env": settings.paypal_env,
+        "ready": paypal.configured(),
+    }
+
+
+@app.post("/api/paypal/create-order")
+async def paypal_create_order(payload: BookingCreate):
+    if not paypal.configured():
+        raise HTTPException(503, "Payment is not configured")
+    try:
+        res = await create_pending_paid(payload)
+    except BookingError as e:
+        raise HTTPException(e.status, e.message)
+    booking, et = res["booking"], res["et"]
+    try:
+        order = await paypal.create_order(
+            booking["amount_cents"], booking["currency"],
+            reference=str(booking["id"]), description=et["name"],
+        )
+    except Exception as exc:  # noqa: BLE001 - release the held slot at once
+        await db.execute(
+            "update sched.bookings set status='canceled', pending_expires_at=null "
+            "where id=$1", booking["id"],
+        )
+        raise HTTPException(502, f"Could not start payment: {exc}")
+    await db.execute(
+        "update sched.bookings set paypal_order_id=$1 where id=$2",
+        order["id"], booking["id"],
+    )
+    return {"order_id": order["id"], "booking_token": str(booking["cancel_token"])}
+
+
+@app.post("/api/paypal/capture-order")
+async def paypal_capture_order(req: CaptureRequest):
+    if not paypal.configured():
+        raise HTTPException(503, "Payment is not configured")
+    b = await db.fetchrow(
+        "select id, amount_cents, currency from sched.bookings where paypal_order_id=$1",
+        req.order_id,
+    )
+    if b is None:
+        raise HTTPException(404, "Unknown order")
+
+    try:
+        cap = await paypal.capture_order(req.order_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Capture failed: {exc}")
+
+    status, capture_id, currency, value = paypal.extract_capture(cap)
+    if status != "COMPLETED":
+        raise HTTPException(402, f"Payment not completed (status {status})")
+
+    expected = f"{b['amount_cents'] / 100:.2f}"
+    amount_ok = value is not None and f"{float(value):.2f}" == expected
+    currency_ok = not (currency and b["currency"]) or currency == b["currency"]
+    if not (amount_ok and currency_ok):
+        raise HTTPException(409, "Payment amount mismatch")
+
+    pool = await db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                res = await finalize_paid_booking(conn, b["id"], capture_id)
+            except BookingError as e:
+                if e.message == "slot_taken":
+                    try:
+                        if capture_id:
+                            await paypal.refund(capture_id)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[paypal] refund after slot clash failed: {exc!r}")
+                    raise HTTPException(
+                        409, "That slot was just taken; your payment has been "
+                             "refunded. Please choose another time.")
+                raise HTTPException(e.status, e.message)
+
+    booking, et = res["booking"], res["et"]
+    # Best-effort calendar mirror, after commit (mirrors the free path).
+    try:
+        names = [p["name"].strip() for p in (booking["participants"] or [])
+                 if isinstance(p, dict) and p.get("name") and p["name"].strip()]
+        cal_summary = (", ".join(names) if names else et["name"])[:190]
+        cal_desc = (f'{et["name"]}\n'
+                    f'Booked by: {booking["booker_name"]} <{booking["booker_email"]}>\n'
+                    f'Join: {booking["location_url"]}')
+        ev_id = await gcal.create_event(
+            cal_summary, booking["start_utc"], et["duration_min"],
+            description=cal_desc, location=booking["location_url"],
+        )
+        if ev_id:
+            await db.execute(
+                "update sched.bookings set gcal_event_id=$1 where id=$2",
+                ev_id, booking["id"],
+            )
+    except Exception as exc:  # noqa: BLE001 - calendar mirror is best-effort
+        print(f"[gcal] paid mirror create failed: {exc!r}")
+
+    return {
+        "id": str(booking["id"]),
+        "event": et["name"],
+        "start_utc": booking["start_utc"].isoformat(),
+        "end_utc": booking["end_utc"].isoformat(),
+        "join_url": booking["location_url"],
+        "participants": booking["participants"],
+        "manage_token": str(booking["cancel_token"]),
+        "booker_timezone": booking["booker_timezone"],
+        "host_timezone": booking["host_timezone"],
+    }
 
 
 @app.get("/api/bookings/{token}")
@@ -187,6 +310,11 @@ async def cancel_booking(token: str):
 async def tick(token: str = Query(...)):
     if not settings.tick_token or token != settings.tick_token:
         raise HTTPException(403, "Forbidden")
+    # Release abandoned payment holds so their slots free up cleanly.
+    await db.execute(
+        "update sched.bookings set status='canceled', pending_expires_at=null "
+        "where status='pending_payment' and pending_expires_at < now()"
+    )
     return await notifications.process_due()
 
 

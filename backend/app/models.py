@@ -20,3 +20,7 @@ class BookingCreate(BaseModel):
 
 class AttendanceMark(BaseModel):
     status: str                             # 'completed' | 'no_show'
+
+
+class CaptureRequest(BaseModel):
+    order_id: str

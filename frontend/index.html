@@ -388,7 +388,11 @@ function renderForm(){
   });
 
   const errP = el("p","err"); errP.style.display="none"; stage.appendChild(errP);
-  const submit = el("button","btn gold","Confirm booking");
+  if(e.is_paid && e.price_cents){
+    stage.appendChild(el("p","tt",
+      `Fee: <b>${fmtMoney(e.price_cents, e.currency||"EUR")}</b>. Payment is taken securely before the meeting is confirmed.`));
+  }
+  const submit = el("button","btn gold", e.is_paid ? "Proceed to payment" : "Confirm booking");
   submit.style.marginTop="8px";
   submit.onclick = ()=>doBook(submit, errP);
   stage.appendChild(submit);
@@ -407,6 +411,61 @@ function collectAnswers(){
     }
   });
   return out;
+}
+
+function fmtMoney(cents, currency){
+  try{ return new Intl.NumberFormat(undefined,{style:"currency",currency:currency||"EUR"}).format((cents||0)/100); }
+  catch(e){ return ((cents||0)/100).toFixed(2)+" "+(currency||"EUR"); }
+}
+
+let _ppLoaded=null;
+function loadPaypalSdk(clientId, currency){
+  if(_ppLoaded) return _ppLoaded;
+  _ppLoaded=new Promise((resolve,reject)=>{
+    const s=document.createElement("script");
+    s.src="https://www.paypal.com/sdk/js?client-id="+encodeURIComponent(clientId)+
+          "&currency="+encodeURIComponent(currency||"EUR")+"&intent=capture&components=buttons";
+    s.onload=()=>window.paypal?resolve(window.paypal):reject(new Error("PayPal failed to load"));
+    s.onerror=()=>reject(new Error("PayPal failed to load"));
+    document.head.appendChild(s);
+  });
+  return _ppLoaded;
+}
+
+async function startPaidFlow(payload, btn, errP){
+  errP.style.display="none";
+  btn.disabled=true; btn.textContent="Loading payment…";
+  let cfg;
+  try{
+    const cr=await fetch("/api/paypal/config"); cfg=await cr.json();
+    if(!cfg.ready||!cfg.client_id) throw new Error("Online payment is not available yet. Please try again later.");
+    await loadPaypalSdk(cfg.client_id, cfg.currency);
+  }catch(err){
+    errP.textContent=err.message||"Payment could not start."; errP.style.display="block";
+    btn.disabled=false; btn.textContent="Proceed to payment"; return;
+  }
+  const box=el("div"); box.id="paypalBox"; box.style.marginTop="12px";
+  btn.replaceWith(box);
+  window.paypal.Buttons({
+    style:{layout:"vertical",color:"gold",shape:"rect",label:"pay"},
+    createOrder: async ()=>{
+      const r=await fetch("/api/paypal/create-order",{method:"POST",
+        headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+      const d=await r.json();
+      if(!r.ok){ errP.textContent=d.detail||"Could not start payment."; errP.style.display="block"; throw new Error(d.detail||"create-order failed"); }
+      return d.order_id;
+    },
+    onApprove: async (data)=>{
+      box.innerHTML="<p class='note'>Confirming your payment…</p>";
+      const r=await fetch("/api/paypal/capture-order",{method:"POST",
+        headers:{"Content-Type":"application/json"}, body:JSON.stringify({order_id:data.orderID})});
+      const d=await r.json();
+      if(!r.ok){ errP.textContent=d.detail||"Payment could not be confirmed."; errP.style.display="block"; box.innerHTML=""; return; }
+      renderConfirmation(d);
+    },
+    onCancel: ()=>{ errP.textContent="Payment was cancelled. You can try again."; errP.style.display="block"; },
+    onError: ()=>{ errP.textContent="A payment error occurred. Please try again."; errP.style.display="block"; }
+  }).render("#paypalBox");
 }
 
 async function doBook(btn, errP){
@@ -431,6 +490,8 @@ async function doBook(btn, errP){
 
   const payload={ event_slug:slug, start_utc:state.slot.utc, name, email,
     booker_timezone:state.tz, guests, answers:collectAnswers() };
+
+  if(state.etype.is_paid){ return startPaidFlow(payload, btn, errP); }
 
   btn.disabled=true; btn.textContent="Booking…";
   try{

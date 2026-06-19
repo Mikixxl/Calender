@@ -15,6 +15,7 @@ from .availability import (
     EventTypeConfig, Interval, Schedule, WeeklyRule, DateOverride, generate_slots,
 )
 from .gcal import external_busy
+from .config import settings
 
 
 class BookingError(Exception):
@@ -70,7 +71,9 @@ async def _busy_for_day(conn, host_date, tz_name) -> list[Interval]:
     day_end = day_start + timedelta(days=1)
     rows = await conn.fetch(
         """select start_utc, end_utc from sched.bookings
-            where status='scheduled' and end_utc > $1 and start_utc < $2""",
+            where (status='scheduled'
+                   or (status='pending_payment' and pending_expires_at > now()))
+              and end_utc > $1 and start_utc < $2""",
         day_start, day_end,
     )
     busy = [Interval(r["start_utc"], r["end_utc"]) for r in rows]
@@ -88,6 +91,10 @@ async def create_booking(payload) -> dict:
     async with pool.acquire() as conn:
         async with conn.transaction():
             et, schedule, cfg = await _load_context(conn, payload.event_slug)
+            # The free endpoint may never finalize a paid meeting. Paid types go
+            # through the PayPal create-order / capture-order pair only.
+            if et["is_paid"]:
+                raise BookingError(402, "This meeting requires payment")
 
             host_date = start.astimezone(ZoneInfo(schedule.timezone)).date()
             busy = await _busy_for_day(conn, host_date, schedule.timezone)
@@ -164,3 +171,107 @@ async def create_booking(payload) -> dict:
         "booker_timezone": booking["booker_timezone"],
         "host_timezone": booking["host_timezone"],
     }
+
+
+# --------------------------------------------------------------------------
+# Paid bookings: hold the slot, then finalize on a confirmed PayPal capture.
+# --------------------------------------------------------------------------
+async def create_pending_paid(payload) -> dict:
+    """Reserve the slot for a paid event and return the row for a PayPal order.
+
+    Mirrors create_booking's slot re-validation, but writes a pending_payment
+    row that holds the slot for the payment window and mints no Zoom. The
+    meeting is created only at capture, once PayPal confirms the money.
+    """
+    start = payload.start_utc
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc)
+
+    pool = await db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            et, schedule, cfg = await _load_context(conn, payload.event_slug)
+            if not et["is_paid"]:
+                raise BookingError(400, "This event type is not a paid meeting")
+            if not et["price_cents"] or et["price_cents"] <= 0:
+                raise BookingError(409, "This meeting has no price set")
+
+            host_date = start.astimezone(ZoneInfo(schedule.timezone)).date()
+            busy = await _busy_for_day(conn, host_date, schedule.timezone)
+            now = datetime.now(timezone.utc)
+            valid = generate_slots(schedule, cfg, busy, now, only_date=host_date)
+            if not any(abs((start - s).total_seconds()) < 1 for s in valid):
+                raise BookingError(409, "That slot is no longer available")
+
+            end = start + timedelta(minutes=et["duration_min"])
+
+            participants = [{"name": payload.name, "email": str(payload.email)}]
+            for g in payload.guests:
+                participants.append({"name": g.name,
+                                     "email": str(g.email) if g.email else None})
+            if len(participants) > et["max_invitees"]:
+                raise BookingError(
+                    422, f"This meeting allows up to {et['max_invitees']} participant(s)")
+
+            expires = now + timedelta(minutes=settings.paypal_pending_minutes)
+            booking = await conn.fetchrow(
+                """insert into sched.bookings
+                     (event_type_id, start_utc, end_utc, status, booker_name,
+                      booker_email, booker_timezone, host_timezone, answers,
+                      participants, amount_cents, currency, pending_expires_at)
+                   values ($1,$2,$3,'pending_payment',$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12)
+                   returning *""",
+                et["id"], start, end, payload.name, str(payload.email),
+                payload.booker_timezone, schedule.timezone,
+                json.dumps(payload.answers or {}), json.dumps(participants),
+                et["price_cents"], et["currency"] or settings.paypal_currency, expires,
+            )
+    return {"booking": booking, "et": et}
+
+
+async def finalize_paid_booking(conn, booking_id, capture_id: str) -> dict:
+    """Turn a captured pending_payment row into a real booking: conflict-check,
+    mint Zoom, flip to scheduled, queue the confirmation. Runs inside the
+    caller's transaction. The caller does the post-commit calendar mirror.
+    """
+    b = await conn.fetchrow(
+        "select * from sched.bookings where id=$1 for update", booking_id
+    )
+    if b is None:
+        raise BookingError(404, "Booking not found")
+    if b["status"] == "scheduled":
+        et = await conn.fetchrow(
+            "select * from sched.event_types where id=$1", b["event_type_id"])
+        return {"booking": b, "et": et}          # idempotent: already finalized
+    if b["status"] != "pending_payment":
+        raise BookingError(409, f"Booking is {b['status']}, cannot finalize")
+
+    et = await conn.fetchrow(
+        "select * from sched.event_types where id=$1", b["event_type_id"])
+
+    clash = await conn.fetchrow(
+        """select 1 from sched.bookings
+            where event_type_id=$1 and start_utc=$2 and id<>$3
+              and (status='scheduled'
+                   or (status='pending_payment' and pending_expires_at > now()))
+            limit 1""",
+        b["event_type_id"], b["start_utc"], b["id"],
+    )
+    if clash is not None:
+        raise BookingError(409, "slot_taken")
+
+    participants = b["participants"] or []
+    join_url = await zoom.meeting_for_booking(
+        et, b["start_utc"], et["duration_min"], participants)
+
+    booking = await conn.fetchrow(
+        """update sched.bookings
+              set status='scheduled', location_url=$2, paypal_capture_id=$3,
+                  pending_expires_at=null
+            where id=$1
+            returning *""",
+        b["id"], join_url, capture_id,
+    )
+    await notifications.queue_for_booking(conn, booking, et)
+    return {"booking": booking, "et": et}
