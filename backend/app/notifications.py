@@ -178,7 +178,8 @@ def build_booker_message(ntype: str, ctx: dict) -> tuple[str, str, str]:
     join = ctx["location_url"] or ""
     manage = f"{settings.public_site_url}/manage?token={ctx['cancel_token']}"
     rebook = f"{settings.public_site_url}/{ctx['event_slug']}"
-    name = ctx["booker_name"]
+    name = ctx.get("recipient_name") or ctx["booker_name"]
+    can_manage = ctx.get("can_manage", True)
     ev = ctx["event_name"]
     names = _participant_names(ctx)
 
@@ -186,18 +187,32 @@ def build_booker_message(ntype: str, ctx: dict) -> tuple[str, str, str]:
         rescheduled = bool(ctx.get("rescheduled"))
         zoom = _zoom_block(ctx["start_utc"], ctx["end_utc"], ctx["booker_tz"],
                            ctx["host_tz"], join, ev, names)
-        lead = ("Your meeting has been rescheduled. The new details are below."
-                if rescheduled else
-                f"Thank you for your booking for <strong>{ev}</strong>. Your meeting is confirmed.")
+        if rescheduled:
+            lead = ("Your meeting has been rescheduled. The new details are below."
+                    if can_manage else
+                    "This meeting has been rescheduled. The new details are below.")
+        else:
+            lead = (f"Thank you for your booking for <strong>{ev}</strong>. Your meeting is confirmed."
+                    if can_manage else
+                    f"{ctx['booker_name']} has invited you to <strong>{ev}</strong>. Your attendance is confirmed.")
+        if can_manage:
+            tail = (
+                f"<p style='font-size:14px;color:#444'>If you are unable to attend, please reschedule to "
+                f"a later time. You may reschedule at any point up to 15 minutes before the meeting.</p>"
+                f"<p style='margin-top:18px'>{_btn(manage, 'Reschedule or cancel')}</p>"
+            )
+        else:
+            tail = (
+                f"<p style='font-size:14px;color:#444'>If the time needs to change, please contact "
+                f"{ctx['booker_name']}, who arranged this meeting.</p>"
+            )
         body = (
             f"<p>Dear {name},</p>"
             f"<p>{lead}</p>"
             f"{zoom}"
             f"<p style='font-size:14px;color:#444'>Please be punctual. You will receive email "
             f"reminders the day before and 30 minutes before the meeting begins.</p>"
-            f"<p style='font-size:14px;color:#444'>If you are unable to attend, please reschedule to "
-            f"a later time. You may reschedule at any point up to 15 minutes before the meeting.</p>"
-            f"<p style='margin-top:18px'>{_btn(manage, 'Reschedule or cancel')}</p>"
+            f"{tail}"
         )
         title = "Your meeting has been rescheduled" if rescheduled else "Your meeting is confirmed"
         subject = (f"Rescheduled: {ev}" if rescheduled else f"Confirmed: {ev}")
@@ -207,12 +222,13 @@ def build_booker_message(ntype: str, ctx: dict) -> tuple[str, str, str]:
         zoom = _zoom_block(ctx["start_utc"], ctx["end_utc"], ctx["booker_tz"],
                            ctx["host_tz"], join, ev, names)
         when = _reminder_when(ctx["start_utc"])
+        rtail = (f"<p style='font-size:14px;color:#444'>If you can no longer attend, you may reschedule "
+                 f"up to 15 minutes before the meeting.</p>"
+                 f"<p style='margin-top:16px'>{_btn(manage, 'Reschedule or cancel')}</p>") if can_manage else ""
         body = (f"<p>Dear {name},</p><p>A reminder of your upcoming <strong>{ev}</strong>. "
                 f"It begins {when}.</p>"
                 f"{zoom}"
-                f"<p style='font-size:14px;color:#444'>If you can no longer attend, you may reschedule "
-                f"up to 15 minutes before the meeting.</p>"
-                f"<p style='margin-top:16px'>{_btn(manage, 'Reschedule or cancel')}</p>")
+                f"{rtail}")
         return (f"Reminder: {ev}", _shell("Your meeting is coming up", body), "")
 
     if ntype == "no_show":
@@ -271,6 +287,26 @@ def _ctx_from_booking(booking, etype, *, rescheduled: bool = False) -> dict:
     }
 
 
+def _recipients(ctx: dict):
+    """The booker (participants[0]) plus every additional participant who has
+    an email. Only the booker may reschedule; guests get an invitation without
+    the manage button. De-duplicated by email so nobody is mailed twice."""
+    out = []
+    seen = set()
+    bk = (ctx.get("booker_email") or "").strip()
+    if bk:
+        seen.add(bk.lower())
+        out.append((bk, ctx.get("booker_name") or "", True))
+    for p in (ctx.get("participants") or [])[1:]:
+        if not isinstance(p, dict):
+            continue
+        em = (p.get("email") or "").strip()
+        if em and em.lower() not in seen:
+            seen.add(em.lower())
+            out.append((em, (p.get("name") or "").strip() or ctx.get("booker_name") or "", False))
+    return out
+
+
 # --------------------------------------------------------------------------
 # Synchronous confirmation - sent at booking time, independent of the tick.
 # --------------------------------------------------------------------------
@@ -281,8 +317,18 @@ async def send_confirmation_sync(booking, etype, *, rescheduled: bool = False) -
     a failure leaves the queued row 'pending' for the tick to retry."""
     ctx = _ctx_from_booking(booking, etype, rescheduled=rescheduled)
     try:
-        subject, html, text = build_booker_message("confirmation", ctx)
+        booker_ctx = {**ctx, "recipient_name": ctx["booker_name"], "can_manage": True}
+        subject, html, text = build_booker_message("confirmation", booker_ctx)
         await asyncio.to_thread(send_email, ctx["booker_email"], subject, html, text)
+        # Each additional participant with an email gets their own invitation,
+        # without the reschedule button - only the booker may move the meeting.
+        for email, rname, _cm in _recipients(ctx)[1:]:
+            try:
+                c = {**ctx, "recipient_name": rname, "can_manage": False}
+                s2, h2, t2 = build_booker_message("confirmation", c)
+                await asyncio.to_thread(send_email, email, s2, h2, t2)
+            except Exception as exc:  # noqa: BLE001 - a guest copy must not block the rest
+                print(f"[mail] participant invite to {email} failed: {exc!r}")
         if not rescheduled:
             try:
                 hs, hh, ht = build_host_notice(ctx)
@@ -394,8 +440,19 @@ async def process_due(limit: int = 50) -> dict:
             "answers": _coerce(r["answers"]), "participants": _coerce(r["participants"]),
         }
         try:
-            subject, html, text = build_booker_message(r["ntype"], ctx)
+            booker_ctx = {**ctx, "recipient_name": ctx["booker_name"], "can_manage": True}
+            subject, html, text = build_booker_message(r["ntype"], booker_ctx)
             await asyncio.to_thread(send_email, r["booker_email"], subject, html, text)
+            # Confirmations and reminders fan out to each additional participant
+            # with an email; only the booker's copy carries the reschedule button.
+            if r["ntype"] in ("confirmation", "reminder"):
+                for email, rname, _cm in _recipients(ctx)[1:]:
+                    try:
+                        c = {**ctx, "recipient_name": rname, "can_manage": False}
+                        s2, h2, t2 = build_booker_message(r["ntype"], c)
+                        await asyncio.to_thread(send_email, email, s2, h2, t2)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[mail] participant copy to {email} failed: {exc!r}")
             # On confirmation, also notify the host with the marking links.
             if r["ntype"] == "confirmation":
                 hs, hh, ht = build_host_notice(ctx)
