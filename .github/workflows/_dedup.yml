@@ -1,0 +1,28 @@
+name: hebcal-dedup
+on:
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "List duplicates only, no deletion"
+        type: boolean
+        default: true
+jobs:
+  dedup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "asyncpg==0.30.0" "requests>=2.31,<3"
+      - name: Dedup hebcal visibility events
+        env:
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DEDUP_DRY: ${{ inputs.dry && '1' || '' }}
+        run: |
+          set +e
+          python scripts/_dedup_cleanup.py > /tmp/o.txt 2>&1
+          ec=$?
+          python3 -c "d=open('/tmp/o.txt',encoding='utf-8',errors='replace').read()[-4500:];d=d.replace('%','%25').replace(chr(13),'').replace(chr(10),'%0A');print('::error title=DEDUP exit=$ec::'+d)"
+          exit 0
