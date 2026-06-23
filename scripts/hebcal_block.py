@@ -179,34 +179,49 @@ def compute_spans(items: list[dict], lead_min: int) -> list[dict]:
 
 # --- Google Calendar via Composio -------------------------------------------
 def gcal_create(api_key: str, span: dict) -> str | None:
-    start = span["start"].astimezone(timezone.utc)
-    dmin = int((span["end"] - span["start"]).total_seconds() // 60)
-    args = {
-        "calendar_id": GCAL_CALENDAR_ID,
-        "summary": span["title"],
-        "start_datetime": start.strftime("%Y-%m-%dT%H:%M:%S"),
-        "timezone": "UTC",
-        "event_duration_hour": dmin // 60,
-        "event_duration_minutes": dmin % 60,
-        "create_meeting_room": False,
-        "description": ("Automatisch aus Hebcal (Shabbat / Feiertag, Berlin). "
-                        "Buchungen sind in diesem Zeitraum blockiert."),
-    }
-    r = requests.post(
-        f"{COMPOSIO_BASE}/tools/execute/{CREATE_TOOL}",
-        headers={"x-api-key": api_key, "Content-Type": "application/json"},
-        json={"connected_account_id": GCAL_CONNECTION,
-              "user_id": GCAL_USER, "arguments": args},
-        timeout=HTTP_TIMEOUT,
-    )
-    if r.status_code >= 400:
-        raise RuntimeError(f"composio {CREATE_TOOL} {r.status_code}: {r.text[:300]}")
-    body = r.json()
-    if body.get("successful") is False:
-        raise RuntimeError(f"composio {CREATE_TOOL} failed: {body.get('error')}")
-    d = body.get("data") or {}
-    rd = d.get("response_data") or d
-    return rd.get("id") or d.get("id")
+    # Composio's GOOGLECALENDAR_CREATE_EVENT caps event_duration_hour at 24.
+    # Shabbat (~26.5h) and multi-day Yom Tov chains exceed that, so the span is
+    # split into consecutive segments of <= 23h and one event is created per
+    # segment. The full, true span still lives in busy_blocks (the enforcement
+    # layer); these calendar events are visibility only. Returns the first
+    # event id for the ledger.
+    seg_start = span["start"].astimezone(timezone.utc)
+    end = span["end"].astimezone(timezone.utc)
+    seg_len = timedelta(hours=23)
+    first_id = None
+    while seg_start < end:
+        seg_end = min(seg_start + seg_len, end)
+        dmin = int((seg_end - seg_start).total_seconds() // 60)
+        args = {
+            "calendar_id": GCAL_CALENDAR_ID,
+            "summary": span["title"],
+            "start_datetime": seg_start.strftime("%Y-%m-%dT%H:%M:%S"),
+            "timezone": "UTC",
+            "event_duration_hour": dmin // 60,
+            "event_duration_minutes": dmin % 60,
+            "create_meeting_room": False,
+            "description": ("Automatisch aus Hebcal (Shabbat / Feiertag, Berlin). "
+                            "Buchungen sind in diesem Zeitraum blockiert."),
+        }
+        r = requests.post(
+            f"{COMPOSIO_BASE}/tools/execute/{CREATE_TOOL}",
+            headers={"x-api-key": api_key, "Content-Type": "application/json"},
+            json={"connected_account_id": GCAL_CONNECTION,
+                  "user_id": GCAL_USER, "arguments": args},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code >= 400:
+            raise RuntimeError(f"composio {CREATE_TOOL} {r.status_code}: {r.text[:300]}")
+        body = r.json()
+        if body.get("successful") is False:
+            raise RuntimeError(f"composio {CREATE_TOOL} failed: {body.get('error')}")
+        d = body.get("data") or {}
+        rd = d.get("response_data") or d
+        ev_id = rd.get("id") or d.get("id")
+        if first_id is None:
+            first_id = ev_id
+        seg_start = seg_end
+    return first_id
 
 
 async def main() -> None:
