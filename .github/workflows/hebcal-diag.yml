@@ -10,8 +10,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install "asyncpg==0.30.0" "requests>=2.31,<3"
-      - name: Capture hebcal_block real output into DB
+      - name: Run hebcal_block and surface output as annotation
         env:
           COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python scripts/_diag_capture.py
+        run: |
+          set +e
+          python scripts/hebcal_block.py > /tmp/o.txt 2>&1
+          ec=$?
+          python3 -c "d=open('/tmp/o.txt',encoding='utf-8',errors='replace').read()[-3500:];d=d.replace('%','%25').replace(chr(13),'').replace(chr(10),'%0A');print('::error title=HEBCAL-CAPTURE exit=$ec::'+d)"
+          exit 0
