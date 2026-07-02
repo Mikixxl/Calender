@@ -112,12 +112,35 @@
     border:1px dashed var(--line);border-radius:12px;padding:0 18px;background:#fbfaf8}
   .tp-scroll{max-height:380px;overflow:auto;padding-right:2px}
   .timepanel .times{grid-template-columns:repeat(auto-fill,minmax(154px,1fr));gap:9px}
+  /* meeting-type selector */
+  .typebar{margin:2px 0 0}
+  .typebar .step-label{margin-bottom:9px}
+  .type-select{
+    -webkit-appearance:none;appearance:none;display:block;
+    width:100%;max-width:540px;
+    font-family:"DM Sans",system-ui,sans-serif;font-size:16.5px;font-weight:500;
+    color:var(--navy);line-height:1.3;
+    background-color:#fff;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%230a1f44' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 15px center;background-size:16px;
+    border:1px solid var(--line);border-radius:11px;padding:14px 46px 14px 16px;
+    cursor:pointer;transition:border-color .15s,box-shadow .15s}
+  .type-select:hover{border-color:var(--gold)}
+  .type-select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(200,162,75,.18)}
+  .type-select optgroup{font-family:"DM Sans",sans-serif;font-weight:600;color:var(--muted)}
+  .type-select option{font-weight:500;color:var(--ink)}
 </style>
 </head>
 <body>
   <header class="top"><div class="top-inner"><img class="logo" src="/ifb-logo.jpg?v=20260618a" alt="International Finance Bank"></div></header>
   <div class="wrap">
     <div class="card">
+      <div class="typebar">
+        <p class="step-label">Meeting type</p>
+        <select id="mtype" class="type-select" aria-label="Select the type of meeting"></select>
+      </div>
+      <div class="hr"></div>
+
       <div id="head"></div>
 
       <div class="tzrow">
@@ -146,15 +169,20 @@ const state = { tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
 const $ = s => document.querySelector(s);
 const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c;
   if(h!==undefined)e.innerHTML=h; return e;};
+const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 function initTz(){
   const sel = $("#tz");
+  const saved = (()=>{ try{ return sessionStorage.getItem("ifb_tz"); }catch(e){ return null; } })();
+  if(saved) state.tz = saved;
   const all = (typeof Intl.supportedValuesOf === "function")
     ? Intl.supportedValuesOf("timeZone") : TZS;
   const opts = Array.from(new Set([state.tz, ...all]));
   sel.innerHTML = opts.map(z=>`<option value="${z}">${z.replace(/_/g," ")}</option>`).join("");
   sel.value = state.tz;
-  sel.onchange = ()=>{ state.tz = sel.value; loadSlots(); };
+  sel.onchange = ()=>{ state.tz = sel.value;
+    try{ sessionStorage.setItem("ifb_tz", state.tz); }catch(e){}
+    loadSlots(); };
 }
 
 function fmtTime(utc, tz){
@@ -525,8 +553,34 @@ function renderConfirmation(b){
      <p style="margin-top:14px"><a class="btn ghost" href="${manage}" style="text-decoration:none">Reschedule or cancel</a></p>`));
 }
 
+async function loadTypeMenu(){
+  const sel = $("#mtype"); if(!sel) return;
+  const bar = document.querySelector(".typebar");
+  const hideBar = ()=>{ if(bar){ bar.style.display="none";
+    const hr=bar.nextElementSibling; if(hr&&hr.classList.contains("hr")) hr.style.display="none"; } };
+  try{
+    const r = await fetch("/api/event-types");
+    if(!r.ok) throw new Error("list");
+    const list = await r.json();
+    if(!Array.isArray(list) || !list.length){ hideBar(); return; }
+    const opt = t=>{
+      const hasDur = /\d+\s*min/i.test(t.name);
+      const label = hasDur ? t.name : `${t.name} \u2014 ${t.duration_min} min`;
+      return `<option value="${esc(t.slug)}"${t.slug===slug?" selected":""}>${esc(label)}</option>`;
+    };
+    const free = list.filter(t=>!t.is_paid), paid = list.filter(t=>t.is_paid);
+    let html = "";
+    if(free.length) html += `<optgroup label="Complimentary">${free.map(opt).join("")}</optgroup>`;
+    if(paid.length) html += `<optgroup label="Paid consultation">${paid.map(opt).join("")}</optgroup>`;
+    sel.innerHTML = html;
+    if([...sel.options].some(o=>o.value===slug)) sel.value = slug;
+    sel.onchange = ()=>{ const v=sel.value; if(v && v!==slug) location.assign("/"+encodeURIComponent(v)); };
+  }catch(e){ hideBar(); }
+}
+
 (async function(){
   initTz();
+  loadTypeMenu();
   if(await loadEvent()) loadSlots();
 })();
 </script>
